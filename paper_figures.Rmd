@@ -1,0 +1,1208 @@
+---
+title: "Monumentome main figures"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+Supplementary panels are written in `supplementary_figures.Rmd`.
+
+```{r libraries}
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+  library(cowplot)
+  library(magick)
+  library(vegan)
+  library(ggVennDiagram)
+  library(Polychrome)
+  library(pals)
+})
+
+ROOT <- normalizePath(".", winslash = "/")
+METADATA_FILE <- file.path(ROOT, "input", "Monumentome_metadata.csv")
+# Positive-control noise is subtracted from the raw MetaPhlAn table by
+# decontaminate_metaphlan.R, which is run in load-data. All figures use its output.
+METAPHLAN_FILE <- file.path(ROOT, "input", "metaphlan_merged_all_taxa_decontaminated.tsv")
+DECONTAMINATE_SCRIPT <- file.path(ROOT, "decontaminate_metaphlan.R")
+# Sequencing controls are never analysed as monument samples.
+SEQUENCING_CONTROL_TYPES <- c("positive_control", "negative_control")
+MAP_FILE <- file.path(ROOT, "paper_assets", "Figure1A_map.png")
+OUTPUT_DIR <- file.path(ROOT, "paper_output")
+dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+MIN_DETECTED_SPECIES <- 2L
+RANDOM_SEED <- 123L
+N_PERMUTATIONS <- 999L
+RICHNESS_PERMUTATIONS <- 100L
+ELLIPSE_LEVEL <- 0.75
+
+MATERIAL_LEVELS <- c("rock/stone", "granite", "metal", "marble", "others")
+MATERIAL_COLORS <- c(
+  "rock/stone" = "#009E73",
+  "granite" = "#CC79A7",
+  "metal" = "#8C510A",
+  "marble" = "#E69F00",
+  "others" = "#0072B2"
+)
+
+FOCAL_GROUP_LEVELS <- c(
+  "Brazil — granite",
+  "Israel — others",
+  "Israel — rock/stone",
+  "United States — marble",
+  "United States — metal"
+)
+FOCAL_GROUP_COLORS <- c(
+  "Brazil — granite" = unname(MATERIAL_COLORS["granite"]),
+  "Israel — others" = unname(MATERIAL_COLORS["others"]),
+  "Israel — rock/stone" = unname(MATERIAL_COLORS["rock/stone"]),
+  "United States — marble" = unname(MATERIAL_COLORS["marble"]),
+  "United States — metal" = unname(MATERIAL_COLORS["metal"])
+)
+FOCAL_AXIS_LABELS <- c(
+  "United States — metal" = "United\nStates\nmetal",
+  "United States — marble" = "United\nStates\nmarble",
+  "Israel — others" = "Israel\nothers",
+  "Israel — rock/stone" = "Israel\nrock/stone",
+  "Brazil — granite" = "Brazil\ngranite"
+)
+FOCAL_LEGEND_LABELS <- c(
+  "Brazil — granite" = "Brazil - granite",
+  "Israel — others" = "Israel - others",
+  "Israel — rock/stone" = "Israel - rock/stone",
+  "United States — marble" = "United States - marble",
+  "United States — metal" = "United States - metal"
+)
+MONUMENT_PAIR_COLORS <- c(
+  "Charging Bull" = "#D55E00",
+  "Fearless Girl" = "#785EF0"
+)
+CORE_THRESHOLD <- 0.75
+```
+
+Material colors are the Okabe–Ito palette, matched to the requested hues: rock/stone green, granite pink, metal brown, marble dark yellow, others blue. Pale yellow is not used, because it disappears on white, and a darker gold than `#E69F00` starts to collide with the other fills for tritanopia. Checked with `colorspace` simulations of deuteranopia, protanopia, and tritanopia. Minimum CIE Lab distance: normal vision 41, deuteranopia 18, protanopia 23, tritanopia 17.
+
+Every later figure uses these same colors. A focal monument–material group takes the color of its material: Brazil — granite is pink, Israel — others is blue, Israel — rock/stone is green, United States — marble is dark yellow, and United States — metal is brown.
+
+Charging Bull and Fearless Girl are both inside the US metal group, so the metal brown cannot separate them. Pure red is not a color-blind-safe color: under deuteranopia it collapses toward brown and green. The safe red in the Okabe–Ito palette is vermillion `#D55E00`. Fearless Girl uses the IBM color-blind purple `#785EF0`, which stays far from that red. Distance between them: normal vision 134, deuteranopia 134, protanopia 125, tritanopia 91.
+
+```{r helpers}
+clean_sample_id <- function(x) {
+  x <- basename(as.character(x))
+  x <- str_remove(x, "\\.(fastq|fq)(\\.gz)?$")
+  x <- str_remove(x, "_R[12](_001)?$")
+  x <- str_remove(x, "_S[0-9]+.*$")
+  x
+}
+
+normalize_material <- function(x) {
+  x <- str_to_lower(str_squish(as.character(x)))
+  case_when(
+    is.na(x) | x == "" ~ "Unknown",
+    x %in% c("rock", "stone", "rock/stone") ~ "rock/stone",
+    x == "granite" ~ "granite",
+    x == "marble" ~ "marble",
+    x %in% c("metal", "bronze", "steel", "gold") ~ "metal",
+    x %in% c("other", "others") ~ "others",
+    TRUE ~ "others"
+  )
+}
+
+paper_theme <- function() {
+  theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 10),
+      plot.tag = element_text(face = "bold", size = 16),
+      axis.text.x = element_text(angle = 40, hjust = 1, vjust = 1),
+      legend.title = element_text(face = "bold"),
+      plot.margin = margin(6, 8, 6, 8)
+    )
+}
+
+paper_theme_continuous <- function() {
+  theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 10),
+      plot.tag = element_text(face = "bold", size = 16),
+      legend.title = element_text(face = "bold"),
+      plot.margin = margin(6, 8, 6, 8)
+    )
+}
+```
+
+Metadata come from `input/Monumentome_metadata.csv`, using `monument_final` and `materials_final`. Panel C keeps samples with at least 2 detected species, using the same focal-group rules as the analysis notebook.
+
+The species table is not the raw MetaPhlAn output. `decontaminate_metaphlan.R` builds the noise list from the two positive standards whose profiles matched the ZymoBIOMICS mix, `BC-0247288828` (Soldier's National Monument) and `BC-0302366907` (Orpheus). A species in either of those two that is not one of the ten D6300 organisms is subtracted, at its higher abundance in the two, from every sample, and each sample is renormalised to 100. Two further samples had been typed as positive standards, `BC-0247292781` (Soldier's National Monument) and `BC-0302370816` (Seoul Tower). Their profiles did not match the mix, so those two rows were removed from the metadata. They are also left out of the transformed table. The script is run here so the table on disk always matches the raw table. The noise list and its effect are shown in `supplementary_figures.Rmd` under Supplementary Figure 2.
+
+The two matched positive standards and all eleven negative controls are removed before any focal-group rule is applied. Both matched standards were logged against Soldier's National Monument or Orpheus with material marble, so without that step they would sit inside United States — marble. The three Tel Megiddo samples typed `control` are swabs of a touched rock surface and are kept.
+
+```{r load-data}
+metadata <- read_csv(METADATA_FILE, show_col_types = FALSE, name_repair = "unique") %>%
+  mutate(
+    sample_name_clean = clean_sample_id(sample_name),
+    materials_plot = normalize_material(materials_final),
+    monument_label = str_replace_all(as.character(monument_final), "_", " ")
+  )
+
+source(DECONTAMINATE_SCRIPT)
+still_present <- metadata$sample_name_clean %in% MISLABELED_SAMPLES
+if (any(still_present) && !all(metadata$sample_type[still_present] == "mislabeled")) {
+  stop("Mislabeled positive controls are still in the metadata without the mislabeled label.")
+}
+metadata <- metadata %>% filter(!still_present)
+decontamination <- decontaminate_metaphlan(ROOT, quiet = TRUE)
+
+metaphlan_wide <- read_tsv(
+  METAPHLAN_FILE,
+  comment = "#",
+  show_col_types = FALSE,
+  name_repair = "minimal"
+)
+if ("#clade_name" %in% names(metaphlan_wide)) {
+  names(metaphlan_wide)[names(metaphlan_wide) == "#clade_name"] <- "clade_name"
+}
+
+sample_cols <- setdiff(names(metaphlan_wide), c("clade_name", "NCBI_tax_id"))
+names(metaphlan_wide)[match(sample_cols, names(metaphlan_wide))] <- clean_sample_id(sample_cols)
+sample_cols <- clean_sample_id(sample_cols)
+if (any(sample_cols %in% MISLABELED_SAMPLES)) {
+  stop("Mislabeled samples are still in the transformed MetaPhlAn table.")
+}
+
+species_rows <- metaphlan_wide %>%
+  filter(str_detect(clade_name, "\\|s__[^|]+$"))
+species_counts <- tibble(
+  sample_name_clean = sample_cols,
+  n_species = colSums(as.matrix(species_rows[, sample_cols, drop = FALSE]) > 0)
+)
+
+metadata_analysis <- metadata %>%
+  filter(!sample_type %in% SEQUENCING_CONTROL_TYPES) %>%
+  left_join(species_counts, by = "sample_name_clean") %>%
+  mutate(n_species = replace_na(n_species, 0L)) %>%
+  filter(n_species >= MIN_DETECTED_SPECIES)
+
+focal_sample_key <- metadata_analysis %>%
+  mutate(
+    focal_group = case_when(
+      country == "Brazil" & monument_final == "Parque_Ibirapuera" & materials_plot == "granite" ~ "Brazil — granite",
+      country == "Israel" & monument_final == "Tel_Megiddo" & materials_plot == "others" ~ "Israel — others",
+      country == "Israel" & monument_final == "Tel_Megiddo" & materials_plot == "rock/stone" ~ "Israel — rock/stone",
+      country == "United States" & monument %in% c("Orpheus", "Soldier's National Monument") & materials_plot == "marble" ~ "United States — marble",
+      country == "United States" & monument %in% c("Charging Bull", "Fearless Girl") & materials_plot == "metal" ~ "United States — metal",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(focal_group))
+```
+
+# Figure 1. Where Monumentome was sampled, and which samples the paper uses
+
+This is the overview figure. It has three panels. The map is the image you supplied. The two bar charts are the original sampling figure, reordered by sample size and recolored with one shared material legend.
+
+## Panel A. Geographic map
+
+Panel A is `paper_assets/Figure1A_map.png`, placed on the page. It is not drawn from coordinates. The file is 784 by 616 pixels, so this panel will look soft in print until a higher-resolution export replaces it.
+
+## Panel B. Original sampling structure
+
+Panel B counts every sample in the metadata, one bar per `monument_final` label. Stack segments are material. Bars run from the largest sample size on the left to the smallest on the right. Underscores in the monument labels are printed as spaces. This panel is the full collection, before the species filter used later in the paper.
+
+## Panel C. Five focal monument–material groups
+
+Panel C counts only samples kept for analysis: at least 2 detected species, and only the five pre-specified monument–material groups. Each bar is one focal group, ordered by descending sample size. Groups tied at 15 samples stay in alphabetical order: Israel — others, then Israel — rock/stone. Each group name is broken so it can be read under the bar: place on the first line and material on the last. “United States” is split further, into “United” / “States”, because that phrase is too wide to sit beside the next bar.
+
+```{r figure1, fig.width=13.5, fig.height=16.4, out.width="100%"}
+original_counts <- metadata %>%
+  count(monument_label, materials_plot, name = "n_samples") %>%
+  filter(materials_plot %in% MATERIAL_LEVELS)
+
+monument_order <- original_counts %>%
+  group_by(monument_label) %>%
+  summarise(n_samples = sum(n_samples), .groups = "drop") %>%
+  arrange(desc(n_samples), monument_label) %>%
+  pull(monument_label)
+
+original_counts <- original_counts %>%
+  mutate(
+    monument_label = factor(monument_label, levels = monument_order),
+    materials_plot = factor(materials_plot, levels = MATERIAL_LEVELS)
+  )
+
+p_b <- ggplot(original_counts, aes(monument_label, n_samples, fill = materials_plot)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.25) +
+  scale_fill_manual(values = MATERIAL_COLORS, drop = FALSE, name = "Material") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  labs(
+    tag = "B",
+    title = "Original Monumentome sampling structure",
+    x = "Monument",
+    y = "Number of samples"
+  ) +
+  paper_theme()
+
+focal_counts <- focal_sample_key %>%
+  count(focal_group, materials_plot, name = "n_samples")
+
+focal_order <- focal_counts %>%
+  group_by(focal_group) %>%
+  summarise(n_samples = sum(n_samples), .groups = "drop") %>%
+  arrange(desc(n_samples), focal_group) %>%
+  pull(focal_group)
+
+focal_counts <- focal_counts %>%
+  mutate(
+    focal_group = factor(focal_group, levels = focal_order),
+    materials_plot = factor(materials_plot, levels = MATERIAL_LEVELS)
+  )
+
+p_c <- ggplot(focal_counts, aes(focal_group, n_samples, fill = materials_plot)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.25) +
+  scale_fill_manual(values = MATERIAL_COLORS, drop = FALSE, name = "Material") +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS, expand = expansion(add = 0.6)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+  labs(
+    tag = "C",
+    title = "Five pre-specified focal monument–material groups",
+    x = "Focal monument–material groups",
+    y = "Number of samples"
+  ) +
+  paper_theme() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 1.05, size = 11),
+    plot.margin = margin(6, 8, 14, 8)
+  )
+
+map_info <- image_info(image_read(MAP_FILE))
+p_a <- ggdraw() +
+  draw_image(MAP_FILE) +
+  theme(plot.margin = margin(4, 4, 4, 4)) +
+  labs(tag = "A") +
+  theme(plot.tag = element_text(face = "bold", size = 16), plot.tag.position = "topleft")
+
+bars <- (p_b | p_c) +
+  plot_layout(guides = "collect", widths = c(1.35, 1.45)) &
+  theme(legend.position = "bottom") &
+  guides(fill = guide_legend(nrow = 1))
+
+figure1 <- p_a / bars +
+  plot_layout(heights = c(map_info$height / map_info$width, 0.82))
+
+figure1_width <- 13.5
+figure1_height <- figure1_width * (map_info$height / map_info$width) + 5.8
+
+ggsave(
+  file.path(OUTPUT_DIR, "Figure1_overview.pdf"),
+  figure1,
+  width = figure1_width,
+  height = figure1_height,
+  units = "in"
+)
+ggsave(
+  file.path(OUTPUT_DIR, "Figure1_overview.png"),
+  figure1,
+  width = figure1_width,
+  height = figure1_height,
+  units = "in",
+  dpi = 300
+)
+
+figure1
+```
+
+Saved copies are `paper_output/Figure1_overview.pdf` and `paper_output/Figure1_overview.png`.
+
+# Figure 2. Species profiles of the five focal monument–material groups
+
+Panels A–D are the UMAP, species-accumulation curve, richness, and Shannon diversity from the analysis notebook. Panels E and F are the Bray–Curtis PCoA and the pairwise distances. They are drawn as one six-panel figure.
+
+Each group keeps the material color from Figure 1. Brazil - granite is pink, Israel - others is blue, Israel - rock/stone is green, United States - marble is dark yellow, and United States - metal is brown. Legend names use a plain hyphen so the group names render in the figure font.
+
+## Panel A. Species-profile UMAP
+
+Hellinger-transformed species abundances are embedded with UMAP, using the same seed and settings as the analysis notebook. Points and ellipses are colored by focal monument–material group.
+
+## Panel B. Species accumulation
+
+Random accumulation curves, with a band of one standard deviation across permutations. The x-axis is the number of samples.
+
+## Panels C and D. Richness and Shannon diversity
+
+Observed species richness and Shannon diversity for each retained focal sample. Boxes and points use the group color. The subtitle is the Kruskal–Wallis p-value. Group names are stacked, as in Figure 1, so the labels stay readable.
+
+## Panel E. Bray–Curtis PCoA
+
+Principal coordinates of the Bray–Curtis distances among focal samples. The subtitle reports the PERMANOVA R² and p-value for a difference among the five groups.
+
+## Panel F. Median Bray–Curtis distance
+
+The boxplot of every sample pair is replaced by a heatmap of one triangle of the group-by-group matrix. The upper triangle is left blank so each pair is shown once. The diagonal is the median distance among samples inside a group. Every other filled cell is the median distance between samples from two different groups. The printed number is that median.
+
+```{r figure2, fig.width=14, fig.height=16.5, out.width="100%"}
+focal_ids <- intersect(focal_sample_key$sample_name_clean, sample_cols)
+species_taxa <- str_remove(str_extract(species_rows$clade_name, "[^|]+$"), "^s__")
+if (anyDuplicated(species_taxa)) species_taxa <- make.unique(species_taxa)
+
+focal_species_matrix <- t(as.matrix(species_rows[, focal_ids, drop = FALSE]))
+colnames(focal_species_matrix) <- species_taxa
+focal_species_matrix <- focal_species_matrix[, colSums(focal_species_matrix) > 0, drop = FALSE]
+
+focal_species_metadata <- focal_sample_key %>%
+  filter(sample_name_clean %in% rownames(focal_species_matrix)) %>%
+  mutate(focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS)) %>%
+  arrange(match(sample_name_clean, rownames(focal_species_matrix)))
+focal_species_matrix <- focal_species_matrix[focal_species_metadata$sample_name_clean, , drop = FALSE]
+focal_species_presence <- 1L * (focal_species_matrix > 0)
+stopifnot(identical(rownames(focal_species_matrix), focal_species_metadata$sample_name_clean))
+
+hellinger_matrix <- decostand(focal_species_matrix, method = "hellinger")
+hellinger_matrix <- hellinger_matrix[, apply(hellinger_matrix, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+set.seed(RANDOM_SEED)
+focal_umap <- uwot::umap(
+  hellinger_matrix,
+  n_neighbors = min(15L, nrow(hellinger_matrix) - 1L),
+  min_dist = 0.20,
+  n_components = 2L,
+  metric = "euclidean",
+  scale = FALSE,
+  init = "spectral",
+  n_threads = 1L,
+  verbose = FALSE
+)
+colnames(focal_umap) <- c("UMAP1", "UMAP2")
+focal_umap_data <- bind_cols(focal_species_metadata, as.data.frame(focal_umap))
+
+p_2a <- ggplot(focal_umap_data, aes(UMAP1, UMAP2, color = focal_group)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  stat_ellipse(aes(group = focal_group), level = ELLIPSE_LEVEL, linewidth = 0.6, show.legend = FALSE) +
+  scale_color_manual(values = FOCAL_GROUP_COLORS, labels = FOCAL_LEGEND_LABELS, drop = FALSE, name = "Focal group") +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE)) +
+  labs(tag = "A", title = "Species-profile UMAP of five focal groups", x = "UMAP 1", y = "UMAP 2") +
+  paper_theme_continuous()
+
+set.seed(RANDOM_SEED)
+accumulation_data <- bind_rows(lapply(FOCAL_GROUP_LEVELS, function(group_name) {
+  sample_ids <- focal_species_metadata %>%
+    filter(focal_group == group_name) %>%
+    pull(sample_name_clean)
+  acc <- specaccum(focal_species_presence[sample_ids, , drop = FALSE], method = "random", permutations = RICHNESS_PERMUTATIONS)
+  tibble(
+    focal_group = group_name,
+    n_samples = acc$sites,
+    accumulated_richness = acc$richness,
+    richness_sd = acc$sd
+  )
+})) %>%
+  mutate(focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS))
+
+p_2b <- ggplot(accumulation_data, aes(n_samples, accumulated_richness, color = focal_group, fill = focal_group)) +
+  geom_ribbon(
+    aes(ymin = pmax(0, accumulated_richness - richness_sd), ymax = accumulated_richness + richness_sd),
+    alpha = 0.18,
+    color = NA
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.4) +
+  scale_color_manual(values = FOCAL_GROUP_COLORS, labels = FOCAL_LEGEND_LABELS, drop = FALSE, name = "Focal group", guide = "none") +
+  scale_fill_manual(values = FOCAL_GROUP_COLORS, labels = FOCAL_LEGEND_LABELS, drop = FALSE, name = "Focal group", guide = "none") +
+  labs(
+    tag = "B",
+    title = "Species accumulation",
+    x = "Number of samples",
+    y = "Accumulated species richness"
+  ) +
+  paper_theme_continuous()
+
+alpha_data <- focal_species_metadata %>%
+  mutate(
+    richness = specnumber(focal_species_matrix),
+    shannon = diversity(focal_species_matrix, index = "shannon")
+  )
+richness_kw <- kruskal.test(richness ~ focal_group, data = alpha_data)
+shannon_kw <- kruskal.test(shannon ~ focal_group, data = alpha_data)
+
+p_2c <- ggplot(alpha_data, aes(focal_group, richness, color = focal_group, fill = focal_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.35) +
+  geom_jitter(width = 0.15, size = 1.3, alpha = 0.85, show.legend = FALSE) +
+  scale_color_manual(values = FOCAL_GROUP_COLORS, drop = FALSE) +
+  scale_fill_manual(values = FOCAL_GROUP_COLORS, drop = FALSE) +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS) +
+  labs(
+    tag = "C",
+    title = "Observed species richness",
+    subtitle = sprintf("Kruskal-Wallis p = %.3g", richness_kw$p.value),
+    x = NULL,
+    y = "Richness"
+  ) +
+  paper_theme() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 0.95, size = 9),
+    legend.position = "none"
+  )
+
+p_2d <- ggplot(alpha_data, aes(focal_group, shannon, color = focal_group, fill = focal_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.35) +
+  geom_jitter(width = 0.15, size = 1.3, alpha = 0.85, show.legend = FALSE) +
+  scale_color_manual(values = FOCAL_GROUP_COLORS, drop = FALSE) +
+  scale_fill_manual(values = FOCAL_GROUP_COLORS, drop = FALSE) +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS) +
+  labs(
+    tag = "D",
+    title = "Shannon alpha diversity",
+    subtitle = sprintf("Kruskal-Wallis p = %.3g", shannon_kw$p.value),
+    x = NULL,
+    y = "Shannon diversity"
+  ) +
+  paper_theme() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 0.95, size = 9),
+    legend.position = "none"
+  )
+
+focal_bray <- vegdist(focal_species_matrix, method = "bray")
+set.seed(RANDOM_SEED)
+focal_permanova <- adonis2(
+  focal_bray ~ focal_group,
+  data = focal_species_metadata %>% select(focal_group),
+  permutations = N_PERMUTATIONS
+)
+pcoa <- wcmdscale(focal_bray, k = 2, eig = TRUE, add = "lingoes")
+positive <- pcoa$eig[pcoa$eig > 0]
+explained <- 100 * positive / sum(positive)
+pcoa_data <- bind_cols(
+  focal_species_metadata,
+  as.data.frame(pcoa$points) %>% setNames(c("PCoA1", "PCoA2"))
+)
+
+p_2e <- ggplot(pcoa_data, aes(PCoA1, PCoA2, color = focal_group)) +
+  geom_point(size = 2.2, alpha = 0.85) +
+  stat_ellipse(aes(group = focal_group), level = ELLIPSE_LEVEL, linewidth = 0.6, show.legend = FALSE) +
+  scale_color_manual(values = FOCAL_GROUP_COLORS, labels = FOCAL_LEGEND_LABELS, drop = FALSE, name = "Focal group") +
+  labs(
+    tag = "E",
+    title = "Bray-Curtis species PCoA",
+    subtitle = sprintf("PERMANOVA R2 = %.3f, p = %.3g", focal_permanova$R2[1], focal_permanova$`Pr(>F)`[1]),
+    x = sprintf("PCoA1 (%.1f%%)", explained[1]),
+    y = sprintf("PCoA2 (%.1f%%)", explained[2])
+  ) +
+  paper_theme_continuous() +
+  theme(legend.position = "none")
+
+bray_matrix <- as.matrix(focal_bray)
+pair_index <- which(upper.tri(bray_matrix), arr.ind = TRUE)
+group_lookup <- setNames(as.integer(focal_species_metadata$focal_group), focal_species_metadata$sample_name_clean)
+sample_1 <- rownames(bray_matrix)[pair_index[, 1]]
+sample_2 <- colnames(bray_matrix)[pair_index[, 2]]
+group_1 <- group_lookup[sample_1]
+group_2 <- group_lookup[sample_2]
+
+median_bray <- tibble(
+  group_low = pmin(group_1, group_2),
+  group_high = pmax(group_1, group_2),
+  bray_curtis = bray_matrix[pair_index]
+) %>%
+  group_by(group_low, group_high) %>%
+  summarise(median_distance = median(bray_curtis), .groups = "drop") %>%
+  mutate(
+    x = factor(FOCAL_GROUP_LEVELS[group_low], levels = FOCAL_GROUP_LEVELS),
+    y = factor(FOCAL_GROUP_LEVELS[group_high], levels = FOCAL_GROUP_LEVELS),
+    label = sprintf("%.2f", median_distance)
+  )
+
+p_2f <- ggplot(median_bray, aes(x, y, fill = median_distance)) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  geom_text(
+    aes(label = label, color = ifelse(median_distance > 0.85, "white", "grey10")),
+    size = 3.4,
+    show.legend = FALSE
+  ) +
+  scale_color_identity() +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS, drop = FALSE) +
+  scale_y_discrete(labels = FOCAL_AXIS_LABELS, limits = rev(FOCAL_GROUP_LEVELS), drop = FALSE) +
+  colorspace::scale_fill_continuous_sequential(
+    palette = "Blues 3",
+    rev = TRUE,
+    limits = c(0, 1),
+    name = "Median distance"
+  ) +
+  labs(tag = "F", title = "Median Bray-Curtis distance", x = NULL, y = NULL) +
+  paper_theme_continuous() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 0.95, size = 8),
+    axis.text.y = element_text(lineheight = 0.95, size = 8),
+    panel.grid = element_blank()
+  ) +
+  coord_fixed()
+
+top_row <- (p_2a | p_2b) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+figure2 <- top_row / (p_2c | p_2d) / (p_2e | p_2f) +
+  plot_layout(heights = c(1.05, 1, 1.05))
+
+ggsave(file.path(OUTPUT_DIR, "Figure2_focal_groups.pdf"), figure2, width = 14, height = 16.5, units = "in")
+ggsave(file.path(OUTPUT_DIR, "Figure2_focal_groups.png"), figure2, width = 14, height = 16.5, units = "in", dpi = 200)
+
+median_bray %>%
+  select(group_x = x, group_y = y, median_distance) %>%
+  arrange(group_y, group_x)
+
+figure2
+```
+
+Saved copies are `paper_output/Figure2_focal_groups.pdf` and `paper_output/Figure2_focal_groups.png`.
+
+# Figure 3. Who overlaps, and what the groups are made of
+
+Panels A–C are presence/absence Venn diagrams for species, genus, and phylum. Panels D and E are the mean MetaPhlAn composition bars. The genus bar keeps the notebook rule: the top 10 genera inside each group, then the union of those lists, with everything else pooled as Other. The phylum bar shows every detected phylum.
+
+The circle outlines and group names use the same five colors as Figures 1 and 2, so Brazil granite is pink in the Venn and pink in the earlier plots. The names are written on two lines, without the em dash, because that character was printing as `<U+2014>`. Each Venn is kept square so the ellipses are not stretched, and the row is only as tall as the diagrams. The shaded overlap regions stay on one light scale. An overlap belongs to more than one group, so filling it with a group color would mix five meanings in one patch. The number in each region is the count of taxa. The stacked bars use a separate color for each genus or phylum, because those colors identify taxa rather than groups.
+
+```{r figure3, fig.width=16, fig.height=12.2, out.width="100%"}
+parse_terminal_rank <- function(clade_name) {
+  terminal <- str_extract(clade_name, "[^|]+$")
+  prefix <- str_extract(terminal, "^[kpcofgst]__")
+  rank <- recode(
+    prefix,
+    "p__" = "phylum",
+    "g__" = "genus",
+    "s__" = "species",
+    .default = NA_character_
+  )
+  tibble(rank = rank, taxon = str_remove(terminal, "^[kpcofgst]__"))
+}
+
+focal_ids <- intersect(focal_sample_key$sample_name_clean, sample_cols)
+rank_rows <- metaphlan_wide %>%
+  bind_cols(parse_terminal_rank(metaphlan_wide$clade_name)) %>%
+  filter(rank %in% c("phylum", "genus", "species"))
+
+metaphlan_long <- rank_rows %>%
+  select(rank, taxon, all_of(focal_ids)) %>%
+  pivot_longer(all_of(focal_ids), names_to = "sample_name_clean", values_to = "abundance") %>%
+  mutate(abundance = as.numeric(abundance)) %>%
+  filter(is.finite(abundance), abundance > 0)
+
+make_taxon_sets <- function(rank_name) {
+  sets <- metaphlan_long %>%
+    filter(rank == rank_name, sample_name_clean %in% focal_sample_key$sample_name_clean) %>%
+    inner_join(focal_sample_key %>% select(sample_name_clean, focal_group), by = "sample_name_clean") %>%
+    distinct(focal_group, taxon) %>%
+    group_by(focal_group) %>%
+    summarise(taxa = list(sort(unique(taxon))), .groups = "drop")
+  setNames(sets$taxa, as.character(sets$focal_group))[FOCAL_GROUP_LEVELS]
+}
+
+plot_group_venn <- function(sets, title_text) {
+  sets <- sets[FOCAL_GROUP_LEVELS]
+  ggVennDiagram(
+    sets,
+    category.names = c(
+      "Brazil\ngranite",
+      "Israel\nothers",
+      "Israel\nrock/stone",
+      "United States\nmarble",
+      "United States\nmetal"
+    ),
+    label = "count",
+    label_alpha = 0,
+    label_size = 3.4,
+    set_size = 3.6,
+    set_color = unname(FOCAL_GROUP_COLORS[FOCAL_GROUP_LEVELS]),
+    edge_size = 0.9
+  ) +
+    scale_fill_gradientn(colours = c("#F7FBFF", "#DEEBF7", "#C6DBEF", "#9ECAE1", "#6BAED6")) +
+    labs(title = title_text, fill = "Count") +
+    coord_fixed(xlim = c(40, 970), ylim = c(20, 990), expand = FALSE, clip = "off") +
+    theme_void(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+      plot.tag = element_text(face = "bold", size = 16),
+      legend.position = "right",
+      legend.key.height = unit(0.45, "cm"),
+      plot.margin = margin(2, 4, 2, 4)
+    )
+}
+
+make_rank_matrix <- function(rank_name) {
+  dat <- metaphlan_long %>%
+    filter(rank == rank_name, sample_name_clean %in% focal_ids) %>%
+    select(sample_name_clean, taxon, abundance) %>%
+    pivot_wider(names_from = taxon, values_from = abundance, values_fill = 0) %>%
+    tibble::column_to_rownames("sample_name_clean")
+  as.matrix(dat[focal_ids, , drop = FALSE])
+}
+
+p_3a <- plot_group_venn(make_taxon_sets("species"), "Species overlap") + labs(tag = "A")
+p_3b <- plot_group_venn(make_taxon_sets("genus"), "Genus overlap") + labs(tag = "B")
+p_3c <- plot_group_venn(make_taxon_sets("phylum"), "Phylum overlap") + labs(tag = "C")
+
+focal_genus_matrix <- make_rank_matrix("genus")
+top10_by_group <- lapply(FOCAL_GROUP_LEVELS, function(group_name) {
+  ids <- focal_sample_key %>% filter(focal_group == group_name) %>% pull(sample_name_clean)
+  ids <- intersect(ids, rownames(focal_genus_matrix))
+  group_means <- colMeans(focal_genus_matrix[ids, , drop = FALSE])
+  names(sort(group_means, decreasing = TRUE))[seq_len(min(10L, length(group_means)))]
+})
+genus_set <- unique(unlist(top10_by_group))
+set.seed(RANDOM_SEED)
+genus_colors <- c(
+  setNames(Polychrome::createPalette(length(genus_set), seedcolors = pals::glasbey()), genus_set),
+  Other = "grey70"
+)
+
+genus_composition <- bind_rows(lapply(FOCAL_GROUP_LEVELS, function(group_name) {
+  ids <- intersect(
+    focal_sample_key %>% filter(focal_group == group_name) %>% pull(sample_name_clean),
+    rownames(focal_genus_matrix)
+  )
+  means <- colMeans(focal_genus_matrix[ids, , drop = FALSE])
+  tibble(
+    focal_group = group_name,
+    taxon = c(genus_set, "Other"),
+    mean_abundance = c(means[genus_set], sum(means[setdiff(names(means), genus_set)]))
+  )
+})) %>%
+  mutate(
+    focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS),
+    taxon = factor(taxon, levels = c(genus_set, "Other"))
+  )
+
+p_3d <- ggplot(genus_composition, aes(focal_group, mean_abundance, fill = taxon)) +
+  geom_col(width = 0.72) +
+  scale_fill_manual(values = genus_colors, drop = FALSE, name = "Genus") +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS) +
+  labs(
+    tag = "D",
+    title = "Mean genus composition",
+    x = NULL,
+    y = "Mean MetaPhlAn relative abundance (%)"
+  ) +
+  paper_theme() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 0.95, size = 8),
+    legend.text = element_text(size = 7),
+    legend.key.size = unit(0.35, "cm")
+  )
+
+focal_phylum_matrix <- make_rank_matrix("phylum")
+phylum_set <- names(sort(colSums(focal_phylum_matrix), decreasing = TRUE))
+set.seed(RANDOM_SEED)
+phylum_colors <- setNames(
+  Polychrome::createPalette(length(phylum_set), seedcolors = c("#5A5156", "#E4E1E3", "#F6222E")),
+  phylum_set
+)
+
+phylum_composition <- bind_rows(lapply(FOCAL_GROUP_LEVELS, function(group_name) {
+  ids <- intersect(
+    focal_sample_key %>% filter(focal_group == group_name) %>% pull(sample_name_clean),
+    rownames(focal_phylum_matrix)
+  )
+  means <- colMeans(focal_phylum_matrix[ids, , drop = FALSE])
+  tibble(focal_group = group_name, taxon = phylum_set, mean_abundance = means[phylum_set])
+})) %>%
+  mutate(
+    focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS),
+    taxon = factor(taxon, levels = phylum_set)
+  )
+
+p_3e <- ggplot(phylum_composition, aes(focal_group, mean_abundance, fill = taxon)) +
+  geom_col(width = 0.72) +
+  scale_fill_manual(values = phylum_colors, drop = FALSE, name = "Phylum") +
+  scale_x_discrete(labels = FOCAL_AXIS_LABELS) +
+  labs(
+    tag = "E",
+    title = "Mean phylum composition",
+    x = NULL,
+    y = "Mean MetaPhlAn relative abundance (%)"
+  ) +
+  paper_theme() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, lineheight = 0.95, size = 8),
+    legend.text = element_text(size = 7),
+    legend.key.size = unit(0.35, "cm")
+  )
+
+figure3 <- (p_3a | p_3b | p_3c) / (p_3d | p_3e) +
+  plot_layout(heights = c(1, 1.15))
+
+ggsave(file.path(OUTPUT_DIR, "Figure3_overlap_composition.pdf"), figure3, width = 16, height = 12.2, units = "in")
+ggsave(file.path(OUTPUT_DIR, "Figure3_overlap_composition.png"), figure3, width = 16, height = 12.2, units = "in", dpi = 160)
+
+figure3
+```
+
+Saved copies are `paper_output/Figure3_overlap_composition.pdf` and `paper_output/Figure3_overlap_composition.png`.
+
+# Figure 4. Human-derived reads, and Charging Bull versus Fearless Girl
+
+The figure has five panels. Panel A is the human-read percentage removed during host filtering, one box per original monument inside the focal groups, on the same retained samples as the later ecology (at least 2 detected species). Collapsed site codes are not used here, so Charging Bull and Fearless Girl are two separate boxes instead of one pooled NYC box. Panels B–E stay inside Charging Bull and Fearless Girl. B is the number of samples at each swabbed location. C is the human-derived DNA removed at locations sampled at least twice; the single Unknown swab stays in B and is left out of C. D is one panel with three Venn diagrams together: species, genera, and phyla shared by the two monuments, using the MetaPhlAn ranks as reported. E is the union of species that are core in either monument, defined as presence in at least 75% of that monument’s retained samples. Color in E is the percentage of samples at that location in which the species was detected. Species names in E are set large enough to read down the rows. The same two colors mark the monuments wherever a monument is colored: Charging Bull vermillion, Fearless Girl purple. Panel A is not colored by monument, because it compares six monuments at once.
+
+An asterisk in E, on the species name and in the US metal column, means that species was on the original pooled US metal core list: present in at least 75% of Charging Bull and Fearless Girl samples taken together. Species that are core on only one statue, and fall below 75% once the two statues are pooled, are shown without an asterisk.
+
+```{r figure4, fig.width=16, fig.height=24, out.width="100%"}
+human_by_monument <- focal_sample_key %>%
+  filter(is.finite(human_read_percent)) %>%
+  mutate(
+    monument_ind = str_replace_all(as.character(monument), "_", " "),
+    monument_ind = factor(
+      monument_ind,
+      levels = c(
+        "Monumento \u00e0s Bandeiras",
+        "Tel Megiddo",
+        "Orpheus",
+        "Soldier's National Monument",
+        "Charging Bull",
+        "Fearless Girl"
+      )
+    )
+  ) %>%
+  filter(!is.na(monument_ind))
+
+human_kw <- kruskal.test(human_read_percent ~ monument_ind, data = human_by_monument)
+
+p_4a <- ggplot(human_by_monument, aes(monument_ind, human_read_percent)) +
+  geom_boxplot(outlier.shape = NA, width = 0.62, fill = "white") +
+  geom_jitter(width = 0.16, alpha = 0.7, size = 1.5, color = "grey20") +
+  labs(
+    tag = "A",
+    title = "Human-derived reads removed during host filtering",
+    subtitle = sprintf("Kruskal-Wallis p = %.3g", human_kw$p.value),
+    x = "Monument",
+    y = "Human-read percentage removed"
+  ) +
+  paper_theme()
+
+cbfg_meta <- focal_sample_key %>%
+  filter(monument %in% c("Charging Bull", "Fearless Girl")) %>%
+  mutate(
+    monument = factor(monument, levels = c("Charging Bull", "Fearless Girl")),
+    swab_position = coalesce(as.character(status_swabbed_position_final), "Unknown"),
+    swab_position = if_else(str_squish(swab_position) == "", "Unknown", swab_position)
+  )
+
+position_order <- c("Butt", "Face", "Untouched_Bottom", "Unknown", "FG_Bottom", "FG_Top")
+position_labels <- c(
+  "Butt" = "Butt",
+  "Face" = "Face",
+  "Untouched_Bottom" = "Untouched bottom",
+  "Unknown" = "Unknown",
+  "FG_Bottom" = "FG bottom",
+  "FG_Top" = "FG top"
+)
+
+position_counts <- cbfg_meta %>%
+  count(monument, swab_position, name = "n_samples") %>%
+  mutate(swab_position = factor(swab_position, levels = position_order))
+
+p_4b <- ggplot(position_counts, aes(swab_position, n_samples, fill = monument)) +
+  geom_col(position = position_dodge(width = 0.8, preserve = "single"), width = 0.72) +
+  scale_fill_manual(values = MONUMENT_PAIR_COLORS, drop = FALSE, name = "Monument") +
+  scale_x_discrete(labels = position_labels) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+  labs(
+    tag = "B",
+    title = "Number of samples from each location",
+    x = "Swabbed position",
+    y = "Number of samples"
+  ) +
+  paper_theme() +
+  theme(legend.position = "bottom")
+
+cbfg_human <- cbfg_meta %>%
+  filter(is.finite(human_read_percent), !swab_position %in% c("Unknown")) %>%
+  add_count(monument, swab_position, name = "n_at_position") %>%
+  filter(n_at_position >= 2) %>%
+  mutate(swab_position = factor(swab_position, levels = position_order))
+
+p_4c <- ggplot(cbfg_human, aes(swab_position, human_read_percent, color = monument, fill = monument)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.35, width = 0.62) +
+  geom_jitter(width = 0.12, size = 1.7, alpha = 0.9, show.legend = FALSE) +
+  facet_wrap(~ monument, scales = "free_x") +
+  scale_color_manual(values = MONUMENT_PAIR_COLORS, drop = FALSE) +
+  scale_fill_manual(values = MONUMENT_PAIR_COLORS, drop = FALSE) +
+  scale_x_discrete(labels = position_labels) +
+  labs(
+    tag = "C",
+    title = "Human-derived DNA removed from each location",
+    x = "Position",
+    y = "Human-read percentage removed"
+  ) +
+  paper_theme() +
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(fill = "white", color = "black"),
+    strip.text = element_text(face = "bold")
+  )
+
+cbfg_ids <- as.character(cbfg_meta$sample_name_clean)
+cbfg_long <- metaphlan_wide %>%
+  bind_cols(parse_terminal_rank(metaphlan_wide$clade_name)) %>%
+  filter(rank %in% c("species", "genus", "phylum")) %>%
+  select(rank, taxon, all_of(cbfg_ids)) %>%
+  pivot_longer(all_of(cbfg_ids), names_to = "sample_name_clean", values_to = "abundance") %>%
+  mutate(abundance = as.numeric(abundance)) %>%
+  filter(is.finite(abundance), abundance > 0) %>%
+  inner_join(cbfg_meta %>% select(sample_name_clean, monument), by = "sample_name_clean")
+
+make_pair_sets <- function(rank_name) {
+  sets <- cbfg_long %>%
+    filter(rank == rank_name) %>%
+    distinct(monument, taxon) %>%
+    group_by(monument) %>%
+    summarise(taxa = list(sort(unique(taxon))), .groups = "drop")
+  setNames(sets$taxa, as.character(sets$monument))[c("Fearless Girl", "Charging Bull")]
+}
+
+plot_pair_venn <- function(sets, title_text) {
+  sets <- sets[c("Charging Bull", "Fearless Girl")]
+  ggVennDiagram(
+    sets,
+    category.names = c("", ""),
+    label = "count",
+    label_alpha = 0,
+    label_size = 4.2,
+    set_size = 0,
+    set_color = unname(MONUMENT_PAIR_COLORS[c("Charging Bull", "Fearless Girl")]),
+    edge_size = 1.15
+  ) +
+    geom_text(
+      data = data.frame(x = 0, y = -4.7, label = "Charging Bull"),
+      aes(x, y, label = label),
+      colour = unname(MONUMENT_PAIR_COLORS["Charging Bull"]),
+      hjust = 0.5, size = 4.4, fontface = "bold", inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = data.frame(x = 0, y = 8.55, label = "Fearless Girl"),
+      aes(x, y, label = label),
+      colour = unname(MONUMENT_PAIR_COLORS["Fearless Girl"]),
+      hjust = 0.5, size = 4.4, fontface = "bold", inherit.aes = FALSE
+    ) +
+    scale_fill_gradientn(colours = c("#F7FBFF", "#DEEBF7", "#C6DBEF", "#9ECAE1", "#6BAED6")) +
+    coord_fixed(xlim = c(-4.4, 4.4), ylim = c(-5.5, 9.5), expand = FALSE) +
+    labs(title = title_text) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+      plot.tag = element_text(face = "bold", size = 16),
+      legend.position = "none",
+      plot.margin = margin(6, 8, 6, 8)
+    )
+}
+
+p_4d_species <- plot_pair_venn(make_pair_sets("species"), "Species shared") + labs(tag = "D")
+p_4d_genus <- plot_pair_venn(make_pair_sets("genus"), "Genera shared")
+p_4d_phylum <- plot_pair_venn(make_pair_sets("phylum"), "Phyla shared")
+
+species_mat <- focal_species_matrix[cbfg_ids, , drop = FALSE]
+monument_prevalence <- bind_rows(lapply(c("Charging Bull", "Fearless Girl"), function(mon) {
+  ids <- cbfg_meta %>% filter(monument == mon) %>% pull(sample_name_clean)
+  mat <- species_mat[ids, , drop = FALSE]
+  tibble(monument = mon, taxon = colnames(mat), prevalence = colMeans(mat > 0))
+}))
+
+cb_core <- monument_prevalence %>% filter(monument == "Charging Bull", prevalence >= CORE_THRESHOLD) %>% pull(taxon)
+fg_core <- monument_prevalence %>% filter(monument == "Fearless Girl", prevalence >= CORE_THRESHOLD) %>% pull(taxon)
+core_order <- c(intersect(cb_core, fg_core), setdiff(fg_core, cb_core), setdiff(cb_core, fg_core))
+
+us_ids <- focal_sample_key %>%
+  filter(focal_group == "United States — metal") %>%
+  pull(sample_name_clean)
+us_prevalence <- colMeans(focal_species_matrix[us_ids, , drop = FALSE] > 0)
+us_metal_core <- names(us_prevalence)[us_prevalence >= CORE_THRESHOLD]
+
+heatmap_positions <- c("FG_Bottom", "FG_Top", "Butt", "Face", "Untouched_Bottom")
+position_prevalence <- bind_rows(lapply(heatmap_positions, function(pos) {
+  ids <- cbfg_meta %>% filter(swab_position == pos) %>% pull(sample_name_clean)
+  mat <- species_mat[ids, core_order, drop = FALSE]
+  tibble(taxon = core_order, display_group = pos, prevalence = colMeans(mat > 0))
+}))
+
+core_heatmap_data <- bind_rows(
+  tibble(
+    taxon = core_order,
+    display_group = "US metal",
+    prevalence = unname(us_prevalence[core_order])
+  ),
+  position_prevalence
+) %>%
+  mutate(
+    block = case_when(
+      display_group == "US metal" ~ "US metal - combined",
+      display_group %in% c("FG_Bottom", "FG_Top") ~ "Fearless Girl",
+      TRUE ~ "Charging Bull"
+    ),
+    display_group = factor(
+      display_group,
+      levels = c("US metal", "FG_Bottom", "FG_Top", "Butt", "Face", "Untouched_Bottom")
+    ),
+    block = factor(block, levels = c("US metal - combined", "Fearless Girl", "Charging Bull")),
+    taxon = factor(taxon, levels = rev(core_order))
+  )
+
+core_axis_labels <- setNames(
+  ifelse(
+    levels(core_heatmap_data$taxon) %in% us_metal_core,
+    paste0(str_replace_all(levels(core_heatmap_data$taxon), "_", " "), " *"),
+    str_replace_all(levels(core_heatmap_data$taxon), "_", " ")
+  ),
+  levels(core_heatmap_data$taxon)
+)
+
+p_4e <- ggplot(core_heatmap_data, aes(display_group, taxon, fill = 100 * prevalence)) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  geom_text(
+    data = core_heatmap_data %>%
+      filter(display_group == "US metal", taxon %in% us_metal_core),
+    aes(label = "*"),
+    size = 7,
+    fontface = "bold",
+    colour = "black",
+    show.legend = FALSE
+  ) +
+  scale_fill_viridis_c(limits = c(0, 100), name = "Prevalence (%)") +
+  scale_x_discrete(labels = c(
+    "US metal" = "US metal",
+    "FG_Bottom" = "FG bottom",
+    "FG_Top" = "FG top",
+    "Butt" = "Butt",
+    "Face" = "Face",
+    "Untouched_Bottom" = "Untouched bottom"
+  )) +
+  scale_y_discrete(labels = core_axis_labels) +
+  facet_grid(. ~ block, scales = "free_x", space = "free_x") +
+  labs(
+    tag = "E",
+    title = "Core species of Charging Bull and Fearless Girl",
+    subtitle = "Union of species core in either monument. Color is the percent of samples at that location. * = on the original US metal core list",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(size = 10),
+    plot.tag = element_text(face = "bold", size = 16),
+    axis.text.x = element_text(angle = 35, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 11, colour = "black"),
+    plot.margin = margin(8, 14, 10, 8),
+    strip.text = element_text(face = "bold"),
+    panel.spacing.x = unit(0.6, "lines"),
+    legend.title = element_text(face = "bold")
+  )
+
+n_core_taxa <- length(core_order)
+e_height <- max(7, 0.42 * n_core_taxa + 2.4)
+figure4_height <- 5.4 + 5.2 + 8.2 + e_height
+figure4 <- p_4a / (p_4b | p_4c) / (p_4d_species | p_4d_genus | p_4d_phylum) / p_4e +
+  plot_layout(heights = c(5.4, 5.2, 8.2, e_height))
+
+ggsave(file.path(OUTPUT_DIR, "Figure4_human_reads_cbfg.pdf"), figure4, width = 16, height = figure4_height, units = "in")
+ggsave(file.path(OUTPUT_DIR, "Figure4_human_reads_cbfg.png"), figure4, width = 16, height = figure4_height, units = "in", dpi = 140)
+
+tibble(
+  taxon = core_order,
+  starred = core_order %in% us_metal_core
+)
+
+figure4
+```
+
+Saved copies are `paper_output/Figure4_human_reads_cbfg.pdf` and `paper_output/Figure4_human_reads_cbfg.png`.
+
+# Figure 5. Literature-associated genera on the focal monuments
+
+Panel A stacks the MetaPhlAn genus abundances for the deterioration-associated genera taken from the literature list. The values are the original MetaPhlAn relative abundances. Genera are not rebuilt from species, and the profiles are not renormalized, so a bar at 25% means those listed genera make up 25% of that sample’s full MetaPhlAn profile. Genera that are not on the list are left out. Each bar is one retained sample, and samples with none of the listed genera are omitted. Each monument has its own panel and its own y-axis, because the totals differ. The same genus keeps the same color in every panel. Panel names use a hyphen, because an em dash was printing as a missing character.
+
+Panel B is the same genus list and the same monuments. A genus is counted as present when its abundance is above zero in at least one sample from that monument. The upper bars count how many listed genera are shared by each combination of monuments. The lower bars count how many listed genera were detected in each monument.
+
+```{r figure5, fig.width=16, fig.height=18, out.width="100%"}
+LITERATURE_GENUS_COLORS <- c(
+  "Abditibacterium" = "#1F77B4",
+  "Blastocatella" = "#FF7F0E",
+  "Bryobacter" = "#2CA02C",
+  "Kocuria" = "#D62728",
+  "Rubrobacter" = "#9467BD",
+  "Geodermatophilus" = "#8C564B",
+  "Modestobacter" = "#E377C2",
+  "Aspergillus" = "#17BECF",
+  "Cladosporium" = "#BCBD22",
+  "Aureobasidium" = "#393B79",
+  "Spirosoma" = "#637939",
+  "Hymenobacter" = "#8C6D31",
+  "Rhodotorula" = "#843C39",
+  "Sporobolomyces" = "#7B4173",
+  "Schizophyllum" = "#3182BD",
+  "Chroococcidiopsis" = "#E6550D",
+  "Scytonema" = "#31A354",
+  "Chroococcus" = "#756BB1",
+  "Deinococcus" = "#6BAED6",
+  "Halococcus" = "#FD8D3C",
+  "Halobacterium" = "#74C476",
+  "Halalkalicoccus" = "#9E9AC8",
+  "Halobacillus" = "#F768A1",
+  "Bacillus" = "#41B6C4",
+  "Staphylococcus" = "#238B45",
+  "Lysinibacillus" = "#88419D",
+  "Gemmatimonas" = "#CB181D",
+  "Nitrospira" = "#A6611A",
+  "Planctomyces" = "#018571",
+  "Pseudomonas" = "#C51B7D",
+  "Sphingomonas" = "#7F7F7F",
+  "Methylobacterium" = "#E6AB02",
+  "Roseomonas" = "#66A61E",
+  "Marinobacter" = "#A6761D",
+  "Candidatus_Nitrosocosmicus" = "#1B9E77",
+  "Nitrosocosmicus" = "#D95F02",
+  "Nitrosotenuis" = "#7570B3",
+  "Nitrososphaera" = "#E7298A"
+)
+literature_genera <- names(LITERATURE_GENUS_COLORS)
+stopifnot(anyDuplicated(unname(LITERATURE_GENUS_COLORS)) == 0)
+
+fig5_sample_key <- focal_sample_key %>%
+  mutate(
+    monument_display = str_replace_all(as.character(monument), "_", " "),
+    fig5_panel = paste(monument_display, materials_plot, sep = " - "),
+    focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS)
+  ) %>%
+  distinct(sample_name_clean, focal_group, materials_plot, monument_display, fig5_panel)
+
+fig5_panel_order <- fig5_sample_key %>%
+  arrange(focal_group, fig5_panel) %>%
+  distinct(fig5_panel) %>%
+  pull(fig5_panel)
+
+fig5_genus <- metaphlan_long %>%
+  filter(
+    rank == "genus",
+    sample_name_clean %in% fig5_sample_key$sample_name_clean,
+    taxon %in% literature_genera
+  ) %>%
+  inner_join(fig5_sample_key %>% select(sample_name_clean, fig5_panel), by = "sample_name_clean") %>%
+  transmute(sample_name_clean, fig5_panel, genus = taxon, abundance)
+
+fig5_sample_order <- fig5_genus %>%
+  group_by(fig5_panel, sample_name_clean) %>%
+  summarise(literature_abundance = sum(abundance, na.rm = TRUE), .groups = "drop") %>%
+  filter(literature_abundance > 0) %>%
+  group_by(fig5_panel) %>%
+  arrange(desc(literature_abundance), sample_name_clean, .by_group = TRUE) %>%
+  ungroup()
+
+make_fig5_panel <- function(panel_name) {
+  panel_title <- fig5_sample_key %>%
+    filter(fig5_panel == panel_name) %>%
+    distinct(monument_display, materials_plot) %>%
+    mutate(title = paste(monument_display, materials_plot, sep = "\n")) %>%
+    pull(title)
+  sample_levels <- fig5_sample_order %>%
+    filter(fig5_panel == panel_name) %>%
+    pull(sample_name_clean)
+  panel_data <- fig5_genus %>%
+    filter(fig5_panel == panel_name, sample_name_clean %in% sample_levels) %>%
+    mutate(
+      sample_name_clean = factor(sample_name_clean, levels = sample_levels),
+      genus = factor(genus, levels = literature_genera)
+    )
+  ggplot(panel_data, aes(sample_name_clean, abundance, fill = genus)) +
+    geom_col(width = 0.92) +
+    scale_fill_manual(values = LITERATURE_GENUS_COLORS, breaks = literature_genera, drop = FALSE) +
+    scale_y_continuous(labels = function(x) paste0(x, "%"), expand = expansion(mult = c(0, 0.05))) +
+    scale_x_discrete(expand = expansion(mult = c(0.01, 0.01))) +
+    labs(title = panel_title, x = NULL, y = "Relative abundance (%)") +
+    theme_classic(base_size = 10.5) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+      legend.position = "none"
+    )
+}
+
+fig5_plot_list <- lapply(fig5_panel_order, make_fig5_panel)
+names(fig5_plot_list) <- fig5_panel_order
+
+fig5_legend_source <- ggplot(
+  tibble(genus = factor(literature_genera, levels = literature_genera), x = 1, y = 1),
+  aes(x, y, fill = genus)
+) +
+  geom_tile() +
+  scale_fill_manual(values = LITERATURE_GENUS_COLORS, breaks = literature_genera, name = "Genus") +
+  guides(fill = guide_legend(ncol = 5, byrow = TRUE)) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 7),
+    legend.key.size = unit(0.38, "cm")
+  )
+fig5_legend <- cowplot::get_legend(fig5_legend_source)
+
+fig5_bars <- patchwork::wrap_plots(fig5_plot_list, ncol = 3) +
+  plot_annotation(
+    title = "Literature-associated genera across focal monuments",
+    subtitle = "Original MetaPhlAn genus relative abundance. Non-target genera are not shown.",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10)
+    )
+  )
+
+fig5_upset_presence <- fig5_genus %>%
+  filter(abundance > 0) %>%
+  distinct(genus, fig5_panel) %>%
+  mutate(present = 1L) %>%
+  pivot_wider(names_from = fig5_panel, values_from = present, values_fill = 0L)
+
+missing_upset_panels <- setdiff(fig5_panel_order, names(fig5_upset_presence))
+if (length(missing_upset_panels) > 0) {
+  for (panel_name in missing_upset_panels) fig5_upset_presence[[panel_name]] <- 0L
+}
+
+fig5_upset_df <- fig5_upset_presence %>%
+  select(genus, all_of(fig5_panel_order))
+upset_df <- as.data.frame(fig5_upset_df %>% select(all_of(fig5_panel_order)))
+rownames(upset_df) <- fig5_upset_df$genus
+
+upset_grob <- grid::grid.grabExpr(
+  print(UpSetR::upset(
+    upset_df,
+    sets = fig5_panel_order,
+    nsets = length(fig5_panel_order),
+    nintersects = NA,
+    order.by = "freq",
+    decreasing = TRUE,
+    keep.order = TRUE,
+    mainbar.y.label = "Number of shared literature-associated genera",
+    sets.x.label = "Literature-associated genera detected",
+    text.scale = c(1.3, 1.15, 1.05, 0.95, 1.05, 0.95),
+    mb.ratio = c(0.60, 0.40)
+  )),
+  wrap.grobs = TRUE
+)
+
+figure5 <- (wrap_elements(fig5_bars) / wrap_elements(fig5_legend) / wrap_elements(upset_grob)) +
+  plot_layout(heights = c(1, 0.28, 0.72))
+
+ggsave(file.path(OUTPUT_DIR, "Figure5_literature_genera.pdf"), figure5, width = 16, height = 18, units = "in")
+ggsave(file.path(OUTPUT_DIR, "Figure5_literature_genera.png"), figure5, width = 16, height = 18, units = "in", dpi = 140)
+
+figure5
+```
+
+Saved copies are `paper_output/Figure5_literature_genera.pdf` and `paper_output/Figure5_literature_genera.png`.
