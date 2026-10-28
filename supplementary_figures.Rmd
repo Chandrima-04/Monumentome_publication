@@ -40,8 +40,6 @@ NOISE_FILE <- file.path(ROOT, "input", "positive_control_noise_species.tsv")
 DECONTAMINATE_SCRIPT <- file.path(ROOT, "decontaminate_metaphlan.R")
 # Sequencing controls are never analysed as monument samples.
 SEQUENCING_CONTROL_TYPES <- c("positive_control", "negative_control")
-ORIGINAL_DEPTH_FILE <- file.path(ROOT, "input", "original_sequencing_depth.tsv")
-HOST_REMOVED_DEPTH_FILE <- file.path(ROOT, "input", "host_removed_sequencing_depth.tsv")
 OUTPUT_DIR <- file.path(ROOT, "paper_output")
 dir.create(OUTPUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
@@ -153,6 +151,42 @@ normalize_material <- function(x) {
     TRUE ~ "others"
   )
 }
+
+# Axis, legend, and title text. Accented names are kept in the metadata and
+# reduced here, because the figure device prints a missing glyph as <U+XXXX>.
+plot_label <- function(x) {
+  y <- as.character(x)
+  ok <- !is.na(y)
+  y[ok] <- stringi::stri_trans_general(y[ok], "Latin-ASCII")
+  y[ok] <- str_replace_all(y[ok], "\u00b2", "2")
+  y[ok] <- str_replace_all(y[ok], "\u00b3", "3")
+  bad <- y[ok & grepl("[^\x01-\x7F]", y)]
+  if (length(bad) > 0) {
+    stop("A plot label still contains a character the figure device cannot draw: ", paste(unique(bad), collapse = " | "))
+  }
+  y
+}
+
+figure_text <- function(x, depth = 0L) {
+  if (is.null(x) || depth > 40L) return(character())
+  if (inherits(x, "ggplot")) x <- ggplotGrob(x)
+  out <- character()
+  lab <- x$label
+  if (is.expression(lab) || is.language(lab) || is.symbol(lab)) lab <- as.character(lab)
+  if (is.character(lab)) out <- c(out, lab)
+  if (!is.null(x$children)) out <- c(out, unlist(lapply(x$children, figure_text, depth + 1L), use.names = FALSE))
+  if (!is.null(x$grobs)) out <- c(out, unlist(lapply(x$grobs, figure_text, depth + 1L), use.names = FALSE))
+  out
+}
+
+save_figure <- function(filename, plot, ...) {
+  labels <- figure_text(plot)
+  bad <- labels[grepl("[^\x01-\x7F]|<U\\+", labels)]
+  if (length(bad) > 0) {
+    stop("Figure text is not plain ASCII:\n", paste(unique(bad), collapse = "\n"))
+  }
+  ggsave(filename, plot, ...)
+}
 ```
 
 All analysis figures use a transformed MetaPhlAn table. `decontaminate_metaphlan.R` builds the noise list from the two positive standards whose profiles matched the ZymoBIOMICS mix: `BC-0247288828` (Soldier's National Monument) and `BC-0302366907` (Orpheus). Every species those two standards contain that is not one of the ten D6300 organisms gets a ceiling equal to its higher abundance in the two. That ceiling is subtracted from the species in every remaining sample where it is present (floored at zero), the removal is carried up the lineage and into the strain bins, and each sample is renormalised so its top-level rows sum to 100 again. `BC-0247292781` and `BC-0302370816` did not match the mix, so those rows were removed from the metadata and from the transformed table. The script is run here so the table on disk always matches the raw table and the metadata. The noise list is shown under Supplementary Figure 2.
@@ -163,7 +197,7 @@ Phylum, genus, and species are counted separately from that transformed table. T
 metadata <- read_csv(METADATA_FILE, show_col_types = FALSE, name_repair = "unique") %>%
   mutate(
     sample_name_clean = clean_sample_id(sample_name),
-    monument_name = str_squish(str_replace_all(as.character(monument), "_", " "))
+    monument_name = plot_label(str_squish(str_replace_all(as.character(monument), "_", " ")))
   )
 
 source(DECONTAMINATE_SCRIPT)
@@ -219,24 +253,12 @@ species_counts <- tibble(
   )
 )
 
-original_depth <- read_tsv(ORIGINAL_DEPTH_FILE, show_col_types = FALSE) %>%
-  mutate(
-    sample_name_clean = clean_sample_id(sample),
-    original_bases_gb = total_Gb
-  ) %>%
-  select(sample_name_clean, original_bases_gb)
-
-clean_depth <- read_tsv(HOST_REMOVED_DEPTH_FILE, show_col_types = FALSE) %>%
-  mutate(
-    sample_name_clean = clean_sample_id(sample),
-    clean_bases_gb = total_Gb
-  ) %>%
-  select(sample_name_clean, clean_bases_gb)
-
 size_samples <- metadata %>%
   filter(!sample_type %in% SEQUENCING_CONTROL_TYPES) %>%
-  left_join(original_depth, by = "sample_name_clean") %>%
-  left_join(clean_depth, by = "sample_name_clean") %>%
+  mutate(
+    original_bases_gb = as.numeric(original_total_bases) / 1e9,
+    clean_bases_gb = as.numeric(host_removed_total_bases) / 1e9
+  ) %>%
   left_join(species_counts, by = "sample_name_clean") %>%
   mutate(
     n_species = replace_na(n_species, 0L),
@@ -260,13 +282,13 @@ The metadata has 2 positive microbial standards and 11 negative controls (air an
 
 Three Tel Megiddo samples are typed `control` in the metadata, but their `material_details` say "Rock/Poll that everyone touch". They are swabs of a touched rock surface, not sequencing controls, so they are not drawn here.
 
-The species colors cover the 15 species with the highest abundance in any single control, plus every species in the reference mix. Everything else is pooled as Other. Colors identify species, not materials or groups. Bar labels are the monument the control was taken alongside.
+The species colors cover the 15 species with the highest abundance in any single control, plus every species in the reference mix. Everything else is pooled as Other. Colors identify species, not materials or groups. Negative controls are labeled with the monument they were taken alongside. Positive standards are labeled with the sample ID only.
 
 The leftmost bar is not a sample. It is the theoretical composition of the ZymoBIOMICS Microbial Community Standard (D6300, genomic DNA basis): eight bacteria at 12% each and two yeasts at 2% each. It sits beside the positive standards for comparison. Two names on the Zymo sheet differ from the names MetaPhlAn 4 reports: *Lactobacillus fermentum* is now *Limosilactobacillus fermentum* and the *Bacillus subtilis* strain is *Bacillus spizizenii*. The reference bar uses the MetaPhlAn names so each species has one color.
 
 ```{r figure-s2, fig.width=12, fig.height=9, out.width="100%"}
 CONTROL_TYPE_LABELS <- c(
-  positive_control = "Positive microbial standard",
+  positive_control = "Positive\nstandard",
   negative_control = "Negative control"
 )
 ZYMO_REFERENCE_LABEL <- "Zymo\nexpected"
@@ -305,10 +327,11 @@ control_key <- metadata %>%
     n_species = replace_na(n_species, 0L),
     control_type = factor(CONTROL_TYPE_LABELS[sample_type], levels = c(ZYMO_REFERENCE_LABEL, CONTROL_TYPE_LABELS)),
     control_detail = coalesce(str_squish(as.character(control_info)), ""),
-    bar_label = if_else(
-      control_detail == "" | control_detail == "Positive microbial standard",
-      paste0(monument_name, " (", sample_name_clean, ")"),
-      paste0(monument_name, ", ", str_remove(control_detail, "^Negative "), " (", sample_name_clean, ")")
+    # Positive standards are a reference mix, not a swab, so no location is printed.
+    bar_label = case_when(
+      sample_type == "positive_control" ~ sample_name_clean,
+      control_detail == "" ~ paste0(monument_name, " (", sample_name_clean, ")"),
+      TRUE ~ paste0(monument_name, ", ", str_remove(control_detail, "^Negative "), " (", sample_name_clean, ")")
     )
   ) %>%
   arrange(control_type, desc(n_species), sample_name_clean) %>%
@@ -389,7 +412,6 @@ p_s2 <- ggplot() +
   scale_y_continuous(labels = function(x) paste0(x, "%"), limits = c(0, 108), expand = expansion(mult = c(0, 0))) +
   labs(
     title = "Species composition of every control sample",
-    subtitle = "Raw MetaPhlAn relative abundance, before noise subtraction. Number above each bar is the detected species count. Leftmost bar is the expected ZymoBIOMICS composition, not a sample.",
     x = NULL,
     y = "Relative abundance (%)"
   ) +
@@ -403,8 +425,8 @@ p_s2 <- ggplot() +
     plot.margin = margin(6, 8, 6, 60)
   )
 
-ggsave(file.path(OUTPUT_DIR, "FigureS2_controls.pdf"), p_s2, width = 12, height = 9, units = "in")
-ggsave(file.path(OUTPUT_DIR, "FigureS2_controls.png"), p_s2, width = 12, height = 9, units = "in", dpi = 140)
+save_figure(file.path(OUTPUT_DIR, "FigureS2_controls.pdf"), p_s2, width = 12, height = 9, units = "in")
+save_figure(file.path(OUTPUT_DIR, "FigureS2_controls.png"), p_s2, width = 12, height = 9, units = "in", dpi = 140)
 
 p_s2
 
@@ -456,7 +478,7 @@ knitr::kable(
 
 # Supplementary Figure 3. Sequenced bases, species, and clean bases
 
-Both panels use sequenced bases, not the compressed FASTQ file size. Original bases are R1+R2 from `input/original_sequencing_depth.tsv`. Clean bases are what remains after adapter trimming and human-read removal, from `input/host_removed_sequencing_depth.tsv`. In that table every sample has fewer clean bases than original bases. Positive and negative sequencing controls are not monument samples and are left out of both panels. One experimental sample has a compressed file but no base count, so it is not drawn.
+Both panels use sequenced bases from the metadata, not the compressed FASTQ file size. Original bases are `original_total_bases`. Clean bases are `host_removed_total_bases`, the bases left after adapter trimming and human-read removal. Both are drawn in gigabases. Positive and negative sequencing controls are not monument samples and are left out of both panels. A sample with no original base count is not drawn. A sample with no host-removed base count stays in panel A and is left out of the paired comparison in panel B.
 
 The analysis notebook drew this scatter from trimmed sequencing depth and added a linear regression line. Panel A keeps dropped samples red and drops the line. The x value is the original R1+R2 sequenced bases. The y value is the species count from the transformed table above: rows that end at `s__`, not genus rows and not `t__` bins. Spearman correlation is `stats::cor.test` (`exact = FALSE` because of ties). A sample is retained at 2 or more of those species.
 
@@ -610,7 +632,6 @@ p_s3b <- ggplot(library_long, aes(monument_name, log10_bases_gb, fill = library)
   labs(
     tag = "B",
     title = "Original and clean sequenced bases by monument",
-    subtitle = "* paired Wilcoxon on bases, BH-adjusted p < 0.05",
     x = NULL,
     y = "log10 sequenced bases (Gb)"
   ) +
@@ -619,14 +640,14 @@ p_s3b <- ggplot(library_long, aes(monument_name, log10_bases_gb, fill = library)
 
 figure_s3 <- p_s3a / p_s3b + plot_layout(heights = c(0.72, 1.35))
 
-ggsave(
+save_figure(
   file.path(OUTPUT_DIR, "FigureS3_sequencing_bases.pdf"),
   figure_s3,
   width = 12,
   height = 16.5,
   units = "in"
 )
-ggsave(
+save_figure(
   file.path(OUTPUT_DIR, "FigureS3_sequencing_bases.png"),
   figure_s3,
   width = 12,
@@ -691,10 +712,12 @@ rownames(s3_umap) <- rownames(hellinger_matrix)
 umap_data <- metadata %>%
   filter(sample_name_clean %in% rownames(species_matrix)) %>%
   mutate(
-    monument_name = str_replace_all(as.character(monument_final), "_", " "),
-    season_name = as.character(seasons_final),
-    material_name = normalize_material(materials_final),
-    climate_name = as.character(koppen_geiger_code)
+    monument_name = plot_label(str_replace_all(as.character(monument_final), "_", " ")),
+    season_name = plot_label(as.character(seasons_final)),
+    material_name = plot_label(normalize_material(materials_final)),
+    climate_name = plot_label(as.character(koppen_geiger_code)),
+    country = plot_label(as.character(country)),
+    city = plot_label(as.character(city))
   )
 umap_data <- bind_cols(
   umap_data,
@@ -771,8 +794,8 @@ p_s4f <- share_limits(p_s4f)
 
 figure_s4 <- (p_s4a | p_s4b | p_s4c) / (p_s4d | p_s4e | p_s4f)
 
-ggsave(file.path(OUTPUT_DIR, "FigureS4_umap_confounders.pdf"), figure_s4, width = 16, height = 11, units = "in")
-ggsave(file.path(OUTPUT_DIR, "FigureS4_umap_confounders.png"), figure_s4, width = 16, height = 11, units = "in", dpi = 140)
+save_figure(file.path(OUTPUT_DIR, "FigureS4_umap_confounders.pdf"), figure_s4, width = 16, height = 11, units = "in")
+save_figure(file.path(OUTPUT_DIR, "FigureS4_umap_confounders.png"), figure_s4, width = 16, height = 11, units = "in", dpi = 140)
 
 figure_s4
 ```
@@ -813,6 +836,7 @@ focal_sample_key <- metadata %>%
   filter(!is.na(focal_group), sample_name_clean %in% sample_cols) %>%
   distinct(sample_name_clean, .keep_all = TRUE) %>%
   mutate(focal_group = factor(focal_group, levels = FOCAL_GROUP_LEVELS))
+stopifnot(nrow(focal_sample_key) > 0, min(focal_sample_key$n_species) >= MIN_DETECTED_SPECIES)
 
 rank_matrix <- function(prefix, sample_ids) {
   rank_rows <- metaphlan_wide %>% filter(rank_prefix == prefix)
@@ -980,8 +1004,8 @@ figure_s5 <- top_row /
   (genus_panels$median | phylum_panels$median) +
   plot_layout(heights = c(1.15, 1, 1.05, 1.15))
 
-ggsave(file.path(OUTPUT_DIR, "FigureS5_genus_phylum.pdf"), figure_s5, width = 14, height = 22, units = "in")
-ggsave(file.path(OUTPUT_DIR, "FigureS5_genus_phylum.png"), figure_s5, width = 14, height = 22, units = "in", dpi = 140)
+save_figure(file.path(OUTPUT_DIR, "FigureS5_genus_phylum.pdf"), figure_s5, width = 14, height = 22, units = "in")
+save_figure(file.path(OUTPUT_DIR, "FigureS5_genus_phylum.png"), figure_s5, width = 14, height = 22, units = "in", dpi = 140)
 
 figure_s5
 ```
@@ -1081,7 +1105,6 @@ p_s6a <- ggplot(prevalence_data, aes(focal_group, taxon, fill = prevalence)) +
   labs(
     tag = "A",
     title = "Prevalence of shared and core species",
-    subtitle = "* = present in at least 75% of samples in that group",
     x = NULL,
     y = NULL
   ) +
@@ -1255,8 +1278,8 @@ p_s6b <- ggplot(tmd_plot_data, aes(focal_group, trait)) +
 
 figure_s6 <- p_s6a / p_s6b + plot_layout(heights = c(1.7, 1))
 
-ggsave(file.path(OUTPUT_DIR, "FigureS6_shared_core_traits.pdf"), figure_s6, width = 12, height = 18, units = "in")
-ggsave(file.path(OUTPUT_DIR, "FigureS6_shared_core_traits.png"), figure_s6, width = 12, height = 18, units = "in", dpi = 140)
+save_figure(file.path(OUTPUT_DIR, "FigureS6_shared_core_traits.pdf"), figure_s6, width = 12, height = 18, units = "in")
+save_figure(file.path(OUTPUT_DIR, "FigureS6_shared_core_traits.png"), figure_s6, width = 12, height = 18, units = "in", dpi = 140)
 
 figure_s6
 
@@ -1270,23 +1293,39 @@ knitr::kable(
 
 Saved copies are `paper_output/FigureS6_shared_core_traits.pdf`, `paper_output/FigureS6_shared_core_traits.png`, `paper_output/FigureS6_mean_positive_abundance.tsv`, and `paper_output/FigureS6_microbe_directory_annotations.tsv`.
 
-# Supplementary Figure 7. Literature-associated genera by biofilm color
+# Supplementary Figure 7. Biofilm photographs and one genus heatmap per monument
 
-Figure 5 shows these genera as stacked bars across the focal monuments. This figure stays inside the two United States marble monuments, Orpheus and Soldier's National Monument, and asks whether swabs of the same visible biofilm color carry similar sets of those genera.
+Panels A–C are left open for photographs of the visible biofilm and colored patina. A is Orpheus, B is Soldier's National Monument, and C is Monumento às Bandeiras.
 
-Each panel is one monument. Rows are retained samples that contain at least one listed genus. Samples with none of the listed genera are omitted. Columns are the literature-associated genera detected in that monument. The cell color is log1p of the MetaPhlAn genus abundance, so a few high values do not flatten the rest. The legend is marked in the original percent abundance. Rows and columns are clustered. The row bar is the biofilm color recorded in the metadata. An unannotated swab is blue, because blue is not one of the recorded biofilm colors. The other swatches use the recorded color.
+D, E, and F are one heatmap each, in that same monument order. Each heatmap stands alone. The literature genera are read from `input/Literature_Microorganism.csv`, sheet 1 of the validated table, the same list as Figure 5. *Cutibacterium* is on that sheet but marked as not recommended, so it is not treated as a literature genus. It still appears where it is needed to reach 75% of that monument. Rows are genera kept for that monument only: a literature genus detected in its swabs, or a genus needed to reach 75% of that monument's own average abundance. Genera absent from the monument are not given a row. Columns are that monument's retained swabs, clustered within the monument. The row bar marks whether the genus is in both sets, only in the top 75%, or only on the literature list. The column bar is the biofilm color. An unannotated swab is blue, because blue is not one of the recorded biofilm colors. The three heatmaps share one color scale, log1p of the MetaPhlAn genus abundance, so a few high values do not flatten the rest. The legend is marked in the original percent abundance.
 
-```{r figure-s7, fig.width=16, fig.height=10, out.width="100%"}
-literature_genera <- c(
-  "Abditibacterium", "Blastocatella", "Bryobacter", "Kocuria", "Rubrobacter",
-  "Geodermatophilus", "Modestobacter", "Aspergillus", "Cladosporium",
-  "Aureobasidium", "Spirosoma", "Hymenobacter", "Rhodotorula", "Sporobolomyces",
-  "Schizophyllum", "Chroococcidiopsis", "Scytonema", "Chroococcus", "Deinococcus",
-  "Halococcus", "Halobacterium", "Halalkalicoccus", "Halobacillus", "Bacillus",
-  "Staphylococcus", "Lysinibacillus", "Gemmatimonas", "Nitrospira", "Planctomyces",
-  "Pseudomonas", "Sphingomonas", "Methylobacterium", "Roseomonas", "Marinobacter",
-  "Candidatus_Nitrosocosmicus", "Nitrosocosmicus", "Nitrosotenuis", "Nitrososphaera"
-)
+```{r figure-s7, fig.width=16, fig.height=30, out.width="100%"}
+literature_genera_from_sheet <- function(path) {
+  sheet <- read_csv(path, skip = 1, show_col_types = FALSE)
+  status <- sheet[["Validation status"]]
+  status[is.na(status)] <- ""
+  genus_cells <- sheet$Genus[!str_detect(status, regex("NOT recommended", ignore_case = TRUE))]
+  parsed <- lapply(genus_cells, function(cell) {
+    if (is.na(cell)) return(character())
+    cell <- str_replace_all(cell, "[^A-Za-z0-9 ;/._-]", " ")
+    cell <- str_replace(cell, regex("also deterioration-associated Bryobacter.*$", ignore_case = TRUE), "")
+    cell <- str_replace_all(cell, regex("-type AOA", ignore_case = TRUE), "")
+    if (str_detect(cell, regex("unresolved|copper-resistant", ignore_case = TRUE))) return(character())
+    parts <- str_trim(unlist(str_split(cell, "[;/]")))
+    parts <- parts[str_detect(parts, "^[A-Z][A-Za-z0-9_.]*$|^Ca\\.")]
+    unlist(lapply(parts, function(genus_name) {
+      genus_name <- str_replace(genus_name, "^Ca\\.\\s*", "Candidatus_")
+      genus_name <- str_replace_all(genus_name, " ", "_")
+      if (genus_name == "Candidatus_Nitrocosmicus") {
+        return(c("Candidatus_Nitrosocosmicus", "Nitrosocosmicus"))
+      }
+      if (genus_name == "Candidatus_Nitrosotenuis") return("Nitrosotenuis")
+      genus_name
+    }))
+  })
+  unique(unlist(parsed))
+}
+literature_genera <- literature_genera_from_sheet(file.path(ROOT, "input", "Literature_Microorganism.csv"))
 BIOFILM_COLORS <- c(
   "black" = "#1A1A1A",
   "black gray" = "#4D4D4D",
@@ -1298,26 +1337,29 @@ BIOFILM_COLORS <- c(
   "brown" = "#8C510A",
   "red brown" = "#A6761D",
   "rust red" = "#D55E00",
+  "rust" = "#E07A3D",
+  "dark rust" = "#6B2A12",
+  "perl" = "#F3E6D4",
+  "yellow" = "#E6C200",
+  "yellow green" = "#8DB600",
+  "black white" = "#5C6B73",
   "unannotated" = "#0072B2"
 )
 
 genus_rows <- metaphlan_wide %>% filter(rank_prefix == "g__")
 genus_names <- str_remove(str_extract(genus_rows$clade_name, "[^|]+$"), "^g__")
-genus_keep <- genus_names %in% literature_genera
-genus_rows <- genus_rows[genus_keep, ]
-genus_names <- genus_names[genus_keep]
-if (anyDuplicated(genus_names)) stop("Duplicate literature genus names in the MetaPhlAn table.")
+if (anyDuplicated(genus_names)) stop("Duplicate genus names in the MetaPhlAn table.")
 
 biofilm_key <- metadata %>%
   filter(!sample_type %in% SEQUENCING_CONTROL_TYPES) %>%
   inner_join(species_counts, by = "sample_name_clean") %>%
   mutate(
     n_species = replace_na(n_species, 0L),
-    biofilm_label = str_squish(str_replace_all(as.character(biofilm_color), "_", " "))
+    biofilm_label = plot_label(str_squish(str_replace_all(as.character(biofilm_color), "_", " ")))
   ) %>%
   filter(
     n_species >= MIN_DETECTED_SPECIES,
-    monument_name %in% c("Orpheus", "Soldier's National Monument"),
+    monument_name %in% c("Orpheus", "Soldier's National Monument") | str_detect(monument_name, "Bandeiras"),
     sample_name_clean %in% sample_cols
   ) %>%
   mutate(
@@ -1339,53 +1381,142 @@ storage.mode(genus_matrix) <- "numeric"
 colnames(genus_matrix) <- genus_names
 rownames(genus_matrix) <- biofilm_key$sample_name_clean
 
-biofilm_heatmap <- function(mon_name, tag) {
-  ids <- biofilm_key %>% filter(monument_name == mon_name) %>% pull(sample_name_clean)
-  heat_mat <- genus_matrix[ids, , drop = FALSE]
-  heat_mat <- heat_mat[, colSums(heat_mat) > 0, drop = FALSE]
-  heat_mat <- heat_mat[rowSums(heat_mat) > 0, , drop = FALSE]
-  colnames(heat_mat) <- str_replace_all(colnames(heat_mat), "_", " ")
-  annotation <- biofilm_key %>%
-    filter(sample_name_clean %in% rownames(heat_mat)) %>%
-    distinct(sample_name_clean, biofilm_label) %>%
-    as.data.frame()
-  rownames(annotation) <- annotation$sample_name_clean
-  annotation <- annotation[rownames(heat_mat), "biofilm_label", drop = FALSE]
-  names(annotation) <- "Biofilm color"
-  present_colors <- BIOFILM_COLORS[names(BIOFILM_COLORS) %in% annotation[["Biofilm color"]]]
-  logged <- log1p(heat_mat)
-  percent_breaks <- c(0, 1, 5, 20, 50)
-  percent_breaks <- percent_breaks[log1p(percent_breaks) <= max(logged) + 1e-8]
-  pheatmap::pheatmap(
-    mat = logged,
-    silent = TRUE,
-    scale = "none",
-    cluster_rows = TRUE,
-    cluster_cols = TRUE,
-    annotation_row = annotation,
-    annotation_names_row = FALSE,
-    annotation_colors = list("Biofilm color" = present_colors),
-    border_color = NA,
-    fontsize = 10,
-    fontsize_row = 8,
-    fontsize_col = 9,
-    angle_col = 45,
-    treeheight_row = 35,
-    treeheight_col = 28,
-    legend_breaks = log1p(percent_breaks),
-    legend_labels = as.character(percent_breaks),
-    main = paste0(tag, "  ", mon_name)
-  )$gtable
+bandeiras_name <- biofilm_key %>%
+  filter(str_detect(monument_name, "Bandeiras")) %>%
+  distinct(monument_name) %>%
+  pull(monument_name)
+if (length(bandeiras_name) != 1) {
+  stop("Expected one Bandeiras monument name, found: ", paste(bandeiras_name, collapse = ", "))
 }
 
+monument_order <- c("Orpheus", "Soldier's National Monument", bandeiras_name)
+monument_ids <- split(
+  biofilm_key$sample_name_clean,
+  factor(biofilm_key$monument_name, levels = monument_order)
+)
+if (!setequal(names(monument_ids), monument_order)) {
+  stop("Unexpected monuments in the heatmap: ", paste(names(monument_ids), collapse = ", "))
+}
+
+genera_covering_monument <- function(ids) {
+  means <- sort(colMeans(genus_matrix[ids, , drop = FALSE]), decreasing = TRUE)
+  share <- cumsum(means) / sum(means)
+  n_keep <- which(share >= 0.75)[1]
+  if (!is.finite(n_keep)) stop("No genera cover 75% of this monument's mean abundance.")
+  names(means)[seq_len(n_keep)]
+}
+top_by_monument <- lapply(monument_ids, genera_covering_monument)
+stopifnot(identical(
+  lengths(top_by_monument[monument_order]),
+  setNames(c(3L, 10L, 12L), monument_order)
+))
+
+block_order <- function(x) {
+  if (nrow(x) < 2 || ncol(x) < 1) return(seq_len(nrow(x)))
+  d <- dist(x)
+  if (any(!is.finite(d))) return(seq_len(nrow(x)))
+  stats::hclust(d, method = "average")$order
+}
+set_colors <- c("Both" = "#882255", "Top 75%" = "#117733", "Literature" = "#332288")
+heat_colors <- colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")))(100)
+heat_breaks <- seq(0, log1p(100) + 1e-6, length.out = length(heat_colors) + 1)
+percent_breaks <- c(0, 1, 5, 20, 50, 100)
+monument_titles <- setNames(monument_order, monument_order)
+
+monument_heatmap <- function(mon_name, tag) {
+  ids <- monument_ids[[mon_name]]
+  top <- top_by_monument[[mon_name]]
+  present <- intersect(literature_genera, colnames(genus_matrix))
+  detected <- present[colSums(genus_matrix[ids, present, drop = FALSE]) > 0]
+  means <- colMeans(genus_matrix[ids, , drop = FALSE])
+  order_by_mean <- function(genera) genera[order(means[genera], decreasing = TRUE)]
+  both <- order_by_mean(intersect(top, detected))
+  top_only <- order_by_mean(setdiff(top, detected))
+  literature_only <- order_by_mean(setdiff(detected, top))
+  genus_order <- c(both, top_only, literature_only)
+  genus_set <- c(
+    rep("Both", length(both)),
+    rep("Top 75%", length(top_only)),
+    rep("Literature", length(literature_only))
+  )
+  sample_order <- ids[block_order(log1p(genus_matrix[ids, genus_order, drop = FALSE]))]
+  heat_mat <- t(log1p(genus_matrix[sample_order, genus_order, drop = FALSE]))
+  rownames(heat_mat) <- str_replace_all(genus_order, "_", " ")
+  row_annotation <- data.frame(Set = genus_set, row.names = rownames(heat_mat), check.names = FALSE)
+  col_annotation <- data.frame(
+    `Biofilm color` = biofilm_key$biofilm_label[match(sample_order, biofilm_key$sample_name_clean)],
+    row.names = sample_order,
+    check.names = FALSE
+  )
+  present_biofilm <- BIOFILM_COLORS[names(BIOFILM_COLORS) %in% col_annotation[["Biofilm color"]]]
+  genus_sizes <- c(length(both), length(top_only), length(literature_only))
+  genus_sizes <- genus_sizes[genus_sizes > 0]
+  gaps_row <- if (length(genus_sizes) > 1) cumsum(genus_sizes)[-length(genus_sizes)] else NULL
+  heat_args <- list(
+    mat = heat_mat,
+    silent = TRUE,
+    scale = "none",
+    cluster_rows = FALSE,
+    cluster_cols = FALSE,
+    color = heat_colors,
+    breaks = heat_breaks,
+    annotation_row = row_annotation,
+    annotation_col = col_annotation,
+    annotation_colors = list(Set = set_colors, `Biofilm color` = present_biofilm),
+    border_color = NA,
+    fontsize = 9,
+    fontsize_row = 8,
+    fontsize_col = 7,
+    angle_col = 90,
+    treeheight_row = 0,
+    treeheight_col = 0,
+    legend_breaks = log1p(percent_breaks),
+    legend_labels = as.character(percent_breaks),
+    main = paste0(tag, "  ", monument_titles[[mon_name]])
+  )
+  if (!is.null(gaps_row)) heat_args$gaps_row <- gaps_row
+  list(gtable = do.call(pheatmap::pheatmap, heat_args)$gtable, n = length(genus_order))
+}
+
+heatmap_d <- monument_heatmap("Orpheus", "D")
+heatmap_e <- monument_heatmap("Soldier's National Monument", "E")
+heatmap_f <- monument_heatmap(bandeiras_name, "F")
+
+photo_placeholder <- function(tag, mon_name) {
+  ggplot() +
+    annotate("text", x = 0.5, y = 0.58, label = "Photograph", fontface = "bold", size = 5) +
+    annotate("text", x = 0.5, y = 0.46, label = "biofilm and colored patina", size = 3.5, color = "grey35") +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+    labs(tag = tag, title = mon_name) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.tag = element_text(face = "bold", size = 16),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 11),
+      plot.background = element_rect(fill = "white", color = "grey75", linewidth = 0.5),
+      plot.margin = margin(8, 8, 8, 8)
+    )
+}
+
+photo_height <- 2.4
+heatmap_heights <- vapply(
+  list(heatmap_d, heatmap_e, heatmap_f),
+  function(heat) max(5, 0.32 * heat$n + 2.2),
+  numeric(1)
+)
+figure_s7_height <- photo_height + sum(heatmap_heights)
 figure_s7 <- gridExtra::arrangeGrob(
-  biofilm_heatmap("Orpheus", "A"),
-  biofilm_heatmap("Soldier's National Monument", "B"),
-  ncol = 2
+  photo_placeholder("A", "Orpheus"),
+  photo_placeholder("B", "Soldier's National Monument"),
+  photo_placeholder("C", bandeiras_name),
+  heatmap_d$gtable,
+  heatmap_e$gtable,
+  heatmap_f$gtable,
+  layout_matrix = rbind(c(1, 2, 3), c(4, 4, 4), c(5, 5, 5), c(6, 6, 6)),
+  heights = c(photo_height, heatmap_heights)
 )
 
-ggsave(file.path(OUTPUT_DIR, "FigureS7_biofilm_genera.pdf"), figure_s7, width = 16, height = 10, units = "in", bg = "white")
-ggsave(file.path(OUTPUT_DIR, "FigureS7_biofilm_genera.png"), figure_s7, width = 16, height = 10, units = "in", dpi = 140, bg = "white")
+save_figure(file.path(OUTPUT_DIR, "FigureS7_biofilm_genera.pdf"), figure_s7, width = 16, height = figure_s7_height, units = "in", bg = "white")
+save_figure(file.path(OUTPUT_DIR, "FigureS7_biofilm_genera.png"), figure_s7, width = 16, height = figure_s7_height, units = "in", dpi = 110, bg = "white")
 
 grid::grid.draw(figure_s7)
 ```
