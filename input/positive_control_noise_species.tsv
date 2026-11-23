@@ -1,0 +1,13 @@
+species	ceiling_abundance	n_positive_controls	positive_controls	n_samples_affected
+Bacillus_vallismortis	0.01819	2	BC-0247288828;BC-0302366907	2
+Staphylococcus_schweitzeri	0.0058	2	BC-0247288828;BC-0302366907	2
+Salmonella_bongori	0.00532	2	BC-0247288828;BC-0302366907	2
+Bacillus_subtilis	0.00469	2	BC-0247288828;BC-0302366907	2
+Escherichia_albertii	0.00352	2	BC-0247288828;BC-0302366907	2
+Escherichia_marmotae	0.00219	2	BC-0247288828;BC-0302366907	3
+Ralstonia_pickettii	0.00149	2	BC-0247288828;BC-0302366907	65
+Bacillus_paranthracis	0.00124	1	BC-0247288828	1
+Bacillus_halotolerans	0.00123	2	BC-0247288828;BC-0302366907	2
+Bradyrhizobium_SGB11337	5.8e-4	1	BC-0247288828	36
+Escherichia_fergusonii	5e-5	1	BC-0247288828	1
+Chlorogloea_sp_CCALA_695	1e-5	1	BC-0247288828	29
