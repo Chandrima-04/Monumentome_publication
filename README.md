@@ -21,8 +21,10 @@ The analysis uses the following inputs:
 
 1. **MetaPhlAn 4 results:** Species-level abundance data generated from the sequencing analysis.
 2. **Sample metadata:** Associated sample information used for downstream analyses and visualizations.
-3. **Microbe Directory annotations:** Microbial characteristics and annotations available from [The Microbe Directory](https://docs.superhuman.com/@themicrobedirectory/home/the-microbe-directory-1).
-4. **Literature review data:** A curated list of microorganisms previously reported in association with monuments, including organisms implicated in biodeterioration and degradation.
+3. **Insertion Sequence** Associated with length and number of insertion sequences (IS).
+4. **PIAS-NN** Exploring which environment the IS belongs to.
+5. **Microbe Directory annotations:** Microbial characteristics and annotations available from [The Microbe Directory](https://docs.superhuman.com/@themicrobedirectory/home/the-microbe-directory-1).
+6. **Literature review data:** A curated list of microorganisms previously reported in association with monuments, including organisms implicated in biodeterioration and degradation.
 
 ## 3. Running the Analysis
 
