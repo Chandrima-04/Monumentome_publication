@@ -371,28 +371,48 @@ save_page <- function(plot, figure_dir, name, height, width = PRINT_WIDTH_IN) {
   invisible(png_path)
 }
 
-# Named genera from sheet 1 of the validated literature table. Cutibacterium is marked
-# "NOT recommended" and is left out; the Bryobacter aside on the Blastocatella row is left out.
+# Named genera from Supplementary Table S7 (`input/Literature_Microorganism.csv`).
+# Unresolved genus cells and the order Oscillatoriales are left out. Cutibacterium
+# is not on the current table. `Candidatus` names keep the MetaPhlAn underscore.
 literature_genera_from_sheet <- function(path) {
-  sheet <- readr::read_csv(path, skip = 1, show_col_types = FALSE)
-  status <- sheet[["Validation status"]]
-  status[is.na(status)] <- ""
-  genus_cells <- sheet$Genus[!stringr::str_detect(status, stringr::regex("NOT recommended", ignore_case = TRUE))]
+  loc <- readr::locale(encoding = "latin1")
+  headed <- readr::read_csv(path, skip = 1, n_max = 0, show_col_types = FALSE, locale = loc)
+  if ("Genus" %in% names(headed)) {
+    sheet <- readr::read_csv(path, skip = 1, show_col_types = FALSE, locale = loc)
+  } else {
+    sheet <- readr::read_csv(
+      path, skip = 1, show_col_types = FALSE, locale = loc,
+      col_names = c(
+        "Domain", "Phylum", "Genus", "Species", "Monument / site", "Material",
+        "Observed effect", "Proposed mechanism", "Evidence grade",
+        "Evidence type", "References"
+      )
+    )
+  }
+  genus_cells <- sheet$Genus
+  if ("Validation status" %in% names(sheet)) {
+    status <- sheet[["Validation status"]]
+    status[is.na(status)] <- ""
+    genus_cells <- genus_cells[!stringr::str_detect(status, stringr::regex("NOT recommended", ignore_case = TRUE))]
+  }
   parsed <- lapply(genus_cells, function(cell) {
-    if (is.na(cell)) return(character())
-    cell <- stringr::str_replace_all(cell, "[^A-Za-z0-9 ;/._-]", " ")
+    if (is.na(cell) || !nzchar(as.character(cell))) return(character())
+    cell <- stringr::str_replace_all(as.character(cell), "[^A-Za-z0-9 ;/._-]", " ")
+    cell <- stringr::str_squish(cell)
+    if (stringr::str_detect(cell, stringr::regex("^(not resolved|unresolved|copper-resistant)", ignore_case = TRUE))) {
+      return(character())
+    }
     cell <- stringr::str_replace(cell, stringr::regex("also deterioration-associated Bryobacter.*$", ignore_case = TRUE), "")
-    cell <- stringr::str_replace_all(cell, stringr::regex("-type AOA", ignore_case = TRUE), "")
-    if (stringr::str_detect(cell, stringr::regex("unresolved|copper-resistant", ignore_case = TRUE))) return(character())
+    cell <- stringr::str_replace_all(cell, stringr::regex("-type AOA|-related AOA", ignore_case = TRUE), "")
     parts <- stringr::str_trim(unlist(stringr::str_split(cell, "[;/]")))
-    parts <- parts[stringr::str_detect(parts, "^[A-Z][A-Za-z0-9_.]*$|^Ca\\.")]
+    parts <- parts[nzchar(parts)]
     unlist(lapply(parts, function(genus_name) {
-      genus_name <- stringr::str_replace(genus_name, "^Ca\\.\\s*", "Candidatus_")
+      genus_name <- stringr::str_replace(genus_name, "^Ca\\.\\s*", "Candidatus ")
+      genus_name <- stringr::str_replace(genus_name, "^Candidatus\\s+", "Candidatus_")
       genus_name <- stringr::str_replace_all(genus_name, " ", "_")
-      if (genus_name == "Candidatus_Nitrocosmicus") {
-        return(c("Candidatus_Nitrosocosmicus", "Nitrosocosmicus"))
-      }
-      if (genus_name == "Candidatus_Nitrosotenuis") return("Nitrosotenuis")
+      if (stringr::str_detect(genus_name, stringr::regex("AOA|resolved", ignore_case = TRUE))) return(character())
+      if (!stringr::str_detect(genus_name, "^[A-Z][A-Za-z0-9_]*$")) return(character())
+      if (genus_name == "Oscillatoriales") return(character())
       genus_name
     }))
   })

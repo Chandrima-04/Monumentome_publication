@@ -380,28 +380,48 @@ save_page <- function(plot, figure_dir, name, height, width = PRINT_WIDTH_IN) {
   invisible(png_path)
 }
 
-# Named genera from sheet 1 of the validated literature table. Cutibacterium is marked
-# "NOT recommended" and is left out; the Bryobacter aside on the Blastocatella row is left out.
+# Named genera from Supplementary Table S7 (`input/Literature_Microorganism.csv`).
+# Unresolved genus cells and the order Oscillatoriales are left out. Cutibacterium
+# is not on the current table. `Candidatus` names keep the MetaPhlAn underscore.
 literature_genera_from_sheet <- function(path) {
-  sheet <- readr::read_csv(path, skip = 1, show_col_types = FALSE)
-  status <- sheet[["Validation status"]]
-  status[is.na(status)] <- ""
-  genus_cells <- sheet$Genus[!stringr::str_detect(status, stringr::regex("NOT recommended", ignore_case = TRUE))]
+  loc <- readr::locale(encoding = "latin1")
+  headed <- readr::read_csv(path, skip = 1, n_max = 0, show_col_types = FALSE, locale = loc)
+  if ("Genus" %in% names(headed)) {
+    sheet <- readr::read_csv(path, skip = 1, show_col_types = FALSE, locale = loc)
+  } else {
+    sheet <- readr::read_csv(
+      path, skip = 1, show_col_types = FALSE, locale = loc,
+      col_names = c(
+        "Domain", "Phylum", "Genus", "Species", "Monument / site", "Material",
+        "Observed effect", "Proposed mechanism", "Evidence grade",
+        "Evidence type", "References"
+      )
+    )
+  }
+  genus_cells <- sheet$Genus
+  if ("Validation status" %in% names(sheet)) {
+    status <- sheet[["Validation status"]]
+    status[is.na(status)] <- ""
+    genus_cells <- genus_cells[!stringr::str_detect(status, stringr::regex("NOT recommended", ignore_case = TRUE))]
+  }
   parsed <- lapply(genus_cells, function(cell) {
-    if (is.na(cell)) return(character())
-    cell <- stringr::str_replace_all(cell, "[^A-Za-z0-9 ;/._-]", " ")
+    if (is.na(cell) || !nzchar(as.character(cell))) return(character())
+    cell <- stringr::str_replace_all(as.character(cell), "[^A-Za-z0-9 ;/._-]", " ")
+    cell <- stringr::str_squish(cell)
+    if (stringr::str_detect(cell, stringr::regex("^(not resolved|unresolved|copper-resistant)", ignore_case = TRUE))) {
+      return(character())
+    }
     cell <- stringr::str_replace(cell, stringr::regex("also deterioration-associated Bryobacter.*$", ignore_case = TRUE), "")
-    cell <- stringr::str_replace_all(cell, stringr::regex("-type AOA", ignore_case = TRUE), "")
-    if (stringr::str_detect(cell, stringr::regex("unresolved|copper-resistant", ignore_case = TRUE))) return(character())
+    cell <- stringr::str_replace_all(cell, stringr::regex("-type AOA|-related AOA", ignore_case = TRUE), "")
     parts <- stringr::str_trim(unlist(stringr::str_split(cell, "[;/]")))
-    parts <- parts[stringr::str_detect(parts, "^[A-Z][A-Za-z0-9_.]*$|^Ca\\.")]
+    parts <- parts[nzchar(parts)]
     unlist(lapply(parts, function(genus_name) {
-      genus_name <- stringr::str_replace(genus_name, "^Ca\\.\\s*", "Candidatus_")
+      genus_name <- stringr::str_replace(genus_name, "^Ca\\.\\s*", "Candidatus ")
+      genus_name <- stringr::str_replace(genus_name, "^Candidatus\\s+", "Candidatus_")
       genus_name <- stringr::str_replace_all(genus_name, " ", "_")
-      if (genus_name == "Candidatus_Nitrocosmicus") {
-        return(c("Candidatus_Nitrosocosmicus", "Nitrosocosmicus"))
-      }
-      if (genus_name == "Candidatus_Nitrosotenuis") return("Nitrosotenuis")
+      if (stringr::str_detect(genus_name, stringr::regex("AOA|resolved", ignore_case = TRUE))) return(character())
+      if (!stringr::str_detect(genus_name, "^[A-Z][A-Za-z0-9_]*$")) return(character())
+      if (genus_name == "Oscillatoriales") return(character())
       genus_name
     }))
   })
@@ -1758,7 +1778,7 @@ The combined figure is two pages: `paper_output/Figure5_human_reads_cbfg` (A–E
 
 # Figure 6. Literature-associated genera on the focal monuments
 
-Panel A stacks the MetaPhlAn genus abundances for the named genera in `input/Literature_Microorganism.csv`, which is sheet 1 of the validated table. *Cutibacterium* is on that sheet but marked as not recommended for inclusion, so it is left out. *Bryobacter* is only an unverified aside on the *Blastocatella* row, so it is left out. A genus is drawn only when its abundance is above zero in at least one focal swab. Genera that are on the list but absent from these swabs are left out of the bars and out of the legend. The values are the original MetaPhlAn relative abundances. Genera are not rebuilt from species, and the profiles are not renormalized, so a bar at 25% means those listed genera make up 25% of that sample’s full MetaPhlAn profile. Each bar is one retained sample, and samples with none of the listed genera are omitted. Each monument has its own panel and its own y-axis, because the totals differ. The same genus keeps the same color in every panel. The most abundant genera get the most widely separated colors. Panel names use a hyphen, because an em dash was printing as a missing character.
+Panel A stacks the MetaPhlAn genus abundances for the named genera in `input/Literature_Microorganism.csv` (Supplementary Table S7). Unresolved genus cells and the order *Oscillatoriales* are left out. *Cutibacterium* is not on that table. A genus is drawn only when its abundance is above zero in at least one focal swab. Genera that are on the list but absent from these swabs are left out of the bars and out of the legend. The values are the original MetaPhlAn relative abundances. Genera are not rebuilt from species, and the profiles are not renormalized, so a bar at 25% means those listed genera make up 25% of that sample’s full MetaPhlAn profile. Each bar is one retained sample, and samples with none of the listed genera are omitted. Each monument has its own panel and its own y-axis, because the totals differ. The same genus keeps the same color in every panel. The most abundant genera get the most widely separated colors. Panel names use a hyphen, because an em dash was printing as a missing character.
 
 Panel B is the same genus list and the same monuments. A genus is counted as present when its abundance is above zero in at least one sample from that monument. The upper bars count how many listed genera are shared by each combination of monuments. The lower bars count how many listed genera were detected in each monument.
 
@@ -2068,7 +2088,7 @@ The combined figure is `paper_output/Figure6_literature_genera.pdf` and `paper_o
 
 # Figure 7. One genus heatmap per monument
 
-A is Orpheus, B is Soldier's National Monument, and C is Monumento às Bandeiras. Each heatmap stands alone. The literature genera are read from `input/Literature_Microorganism.csv`, sheet 1 of the validated table, the same list as Figure 6. *Cutibacterium* is on that sheet but marked as not recommended, so it is not treated as a literature genus. It still appears where it is needed to reach 75% of that monument. Rows are genera kept for that monument only: a literature genus detected in its swabs, or a genus needed to reach 75% of that monument's own average abundance. Genera absent from the monument are not given a row. Columns are that monument's retained swabs, labeled without the `BC-` prefix. Genera stay in three Set blocks (both lists, only the top 75%, or only literature), ordered by mean abundance inside each block. Samples are clustered by average-linkage Euclidean distance on the same 0–1 values shown in the cells. Set, biofilm color, and the abundance scale are defined once for all three panels and drawn in one shared legend. The row bar is that Set class. The column bar is biofilm color, using the same colors on every panel; an unannotated swab is blue. Abundance is MetaPhlAn genus percent mapped onto 0–1 by `log1p(abundance) / log1p(100)`.
+A is Orpheus, B is Soldier's National Monument, and C is Monumento às Bandeiras. Each heatmap stands alone. The literature genera are read from `input/Literature_Microorganism.csv` (Supplementary Table S7), the same list as Figure 6. Unresolved genus cells and the order *Oscillatoriales* are left out. *Cutibacterium* is not on that table. It still appears where it is needed to reach 75% of that monument. Rows are genera kept for that monument only: a literature genus detected in its swabs, or a genus needed to reach 75% of that monument's own average abundance. Genera absent from the monument are not given a row. Columns are that monument's retained swabs, labeled without the `BC-` prefix. Genera stay in three Set blocks (both lists, only the top 75%, or only literature), ordered by mean abundance inside each block. Samples are clustered by average-linkage Euclidean distance on the same 0–1 values shown in the cells. Set, biofilm color, and the abundance scale are defined once for all three panels and drawn in one shared legend. The row bar is that Set class. The column bar is biofilm color, using the same colors on every panel; an unannotated swab is blue. Abundance is MetaPhlAn genus percent mapped onto 0–1 by `log1p(abundance) / log1p(100)`.
 
 ```{r figure7, fig.width=16, fig.height=30, out.width="100%"}
 FIG7_DIR <- file.path(OUTPUT_DIR, "Figure7")
